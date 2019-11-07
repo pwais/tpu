@@ -36,6 +36,7 @@ class TfExampleDecoder(object):
     self._keys_to_features = {
         'image/encoded': tf.FixedLenFeature((), tf.string),
         'image/source_id': tf.FixedLenFeature((), tf.string, ''),
+        'image/filename': tf.FixedLenFeature((), tf.string, ''),
         'image/height': tf.FixedLenFeature((), tf.int64),
         'image/width': tf.FixedLenFeature((), tf.int64),
         'image/object/bbox/xmin': tf.VarLenFeature(tf.float32),
@@ -138,11 +139,13 @@ class TfExampleDecoder(object):
           tf.greater(tf.strings.length(parsed_tensors['image/source_id']),
                      0), lambda: parsed_tensors['image/source_id'],
           lambda: _get_source_id_from_encoded_image(parsed_tensors))
+    filename = parsed_tensors['image/filename']
     if self._include_mask:
       masks = self._decode_masks(parsed_tensors)
 
     decoded_tensors = {
         'image': image,
+        'filename': filename,
         'source_id': source_id,
         'height': parsed_tensors['image/height'],
         'width': parsed_tensors['image/width'],

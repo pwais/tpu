@@ -62,7 +62,7 @@ class Parser(object):
       num_scales: `int` number representing intermediate scales added
         on each level. For instances, num_scales=2 adds one additional
         intermediate anchor scales [2^0, 2^0.5] on each level.
-      aspect_ratios: `list` of float numbers representing the aspect raito
+      aspect_ratios: `list` of float numbers representing the aspect ratio
         anchors added on each level. The number indicates the ratio of width to
         height. For instances, aspect_ratios=[1.0, 2.0, 0.5] adds three anchors
         on each scale level.
@@ -324,6 +324,7 @@ class Parser(object):
     # Sets up groundtruth data for evaluation.
     groundtruths = {
         'source_id': data['source_id'],
+        'filename': data['filename'],
         'height': data['height'],
         'width': data['width'],
         'num_groundtrtuhs': tf.shape(data['groundtruth_classes']),
@@ -389,6 +390,7 @@ class Parser(object):
           data['groundtruth_boxes'], image_shape)
       groundtruths = {
           'source_id': data['source_id'],
+          'filename': data['filename'],
           'height': data['height'],
           'width': data['width'],
           'num_detections': tf.shape(data['groundtruth_classes']),

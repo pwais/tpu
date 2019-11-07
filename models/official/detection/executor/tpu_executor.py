@@ -111,7 +111,7 @@ class TpuExecutor(object):
         evaluation_master=params.platform.eval_master,
         model_dir=params.model_dir,
         log_step_count_steps=params.train.iterations_per_loop,
-        tpu_config=tpu_config,
+        tpu_config=tpu_config if params.use_tpu else None,
     )
     self._estimator = tf.estimator.tpu.TPUEstimator(
         model_fn=model_fn,
