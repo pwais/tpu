@@ -42,6 +42,11 @@ class RetinanetModel(base_model.Model):
     # Loss function.
     self._cls_loss_fn = losses.RetinanetClassLoss(params.retinanet_loss)
     self._box_loss_fn = losses.RetinanetBoxLoss(params.retinanet_loss)
+    self._cuboid_loss_fn = None
+    if params.retinanet_loss.include_cuboid_loss:
+        self._cuboid_loss_fn = \
+            losses.RetinanetCuboidLoss(params.retinanet_loss)
+
     self._box_loss_weight = params.retinanet_loss.box_loss_weight
 
     # Predict function.
@@ -89,19 +94,25 @@ class RetinanetModel(base_model.Model):
 
     outputs = self.model_outputs(features, labels, mode=mode_keys.TRAIN)
 
-    # Now for losses!!
-    assert False
-
     # Adds RetinaNet model losses.
     cls_loss = self._cls_loss_fn(
         outputs['cls_outputs'], labels['cls_targets'], labels['num_positives'])
     box_loss = self._box_loss_fn(
         outputs['box_outputs'], labels['box_targets'], labels['num_positives'])
     model_loss = cls_loss + self._box_loss_weight * box_loss
-
+    
     self.add_scalar_summary('cls_loss', cls_loss)
     self.add_scalar_summary('box_loss', box_loss)
     self.add_scalar_summary('model_loss', model_loss)
+
+    # Optionally add cuboid losses
+    if self._cuboid_loss_fn is not None:
+        cuboid_losses = self._cuboid_loss_fn(
+            outputs['cuboid_outputs', labels['cuboid_targets'],
+            labels['num_positives'])
+        for cuboid_prop, loss_value in cuboid_losses.items():
+            model_loss = model_loss + loss_value
+            self.add_scalar_summary(cuboid_prop + '_loss', loss_value)
 
     total_loss, train_op = self.optimize(model_loss)
     scaffold_fn = self.restore_from_checkpoint()

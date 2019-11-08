@@ -67,6 +67,9 @@ RETINANET_CFG.override({
         'focal_loss_gamma': 1.5,
         'huber_loss_delta': 0.1,
         'box_loss_weight': 50,
+        'cuboid_yaw_num_bins': 8,
+        'include_cuboid_loss': False,
+        'cuboid_huber_loss_delta': 0.5,
     },
     'postprocess': {
         'min_level': 3,
@@ -83,5 +86,6 @@ RETINANET_RESTRICTIONS = [
     'anchor.min_level == postprocess.min_level',
     'anchor.max_level == postprocess.max_level',
     'retinanet_head.num_classes == retinanet_loss.num_classes',
+    'retinanet_head.cuboid_yaw_num_bins == retinanet_loss.cuboid_yaw_num_bins',
 ]
 # pylint: enable=line-too-long

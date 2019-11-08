@@ -467,10 +467,10 @@ class RetinanetHead(object):
           name='%s-predict' % name)
     
     name_to_head = {
-      'cuboid-center': create_head('center', 2),
-      'cuboid-depth': create_head('depth', 1),
-      'cuboid-yaw': create_head('yaw', self._cuboid_yaw_num_bins),
-      'cuboid-size': create_head('size', 3),
+      'cuboid_center': create_head('center', 2),
+      'cuboid_depth': create_head('depth', 1),
+      'cuboid_yaw': create_head('yaw', 3 * self._cuboid_yaw_num_bins),
+      'cuboid_size': create_head('size', 3),
     }
     return name_to_head
 

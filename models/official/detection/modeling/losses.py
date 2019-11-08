@@ -358,9 +358,7 @@ class RetinanetClassLoss(object):
     self._focal_loss_gamma = params.focal_loss_gamma
 
   def __call__(self, cls_outputs, labels, num_positives):
-    """Computes total detection loss.
-
-    Computes total detection loss including box and class loss from all levels.
+    """Computes class loss from all levels.
 
     Args:
       cls_outputs: an OrderDict with keys representing levels and values
@@ -371,7 +369,7 @@ class RetinanetClassLoss(object):
       num_positives: number of positive examples in the minibatch.
 
     Returns:
-      an integar tensor representing total class loss.
+      an scalar tensor representing total class loss.
     """
     # Sums all positives in a batch for normalization and avoids zero
     # num_positives_sum, which would lead to inf loss during training
@@ -412,9 +410,7 @@ class RetinanetBoxLoss(object):
     self._huber_loss_delta = params.huber_loss_delta
 
   def __call__(self, box_outputs, labels, num_positives):
-    """Computes box detection loss.
-
-    Computes total detection loss including box and class loss from all levels.
+    """Computes box detection loss from all levels.
 
     Args:
       box_outputs: an OrderDict with keys representing levels and values
@@ -425,7 +421,7 @@ class RetinanetBoxLoss(object):
       num_positives: number of positive examples in the minibatch.
 
     Returns:
-      an integar tensor representing total box regression loss.
+      an scalar tensor representing total box regression loss.
     """
     # Sums all positives in a batch for normalization and avoids zero
     # num_positives_sum, which would lead to inf loss during training
@@ -456,6 +452,146 @@ class RetinanetBoxLoss(object):
     box_loss /= normalizer
     return box_loss
 
+
+class RetinanetCuboidLoss(object):
+  """RetinaNet cuboid loss."""
+
+  def __init__(self, params):
+    self._cuboid_yaw_num_bins = params.cuboid_yaw_num_bins
+    self._cuboid_huber_loss_delta = params._cuboid_huber_loss_delta
+
+  def __call__(self, cuboid_outputs, labels, num_positives):
+    """Computes cuboid estimation loss.
+
+    Computes cuboid losses from all levels.
+
+    Args:
+      cuboid_outputs: a dict of ouput property to outputs.  Each individual
+        output is an OrderDict with keys representing levels and values
+        representing logits in [batch_size, height, width,
+        num_anchors * output_dimension].
+      labels: the dictionary that returned from dataloader that includes
+        cuboid groundturth targets.
+      num_positives: number of positive examples in the minibatch.
+
+    Returns:
+      an dict of loss to scalar tensor representing cuboid regression losses.
+    """
+    # Sums all positives in a batch for normalization and avoids zero
+    # num_positives_sum, which would lead to inf loss during training
+    num_positives_sum = tf.reduce_sum(num_positives) + 1.0
+
+    cuboid_losses = {
+      'cuboid_center':
+        self.center_loss(cuboid_outputs, labels, num_positives_sum),
+      'cuboid_depth': 
+        self.depth_loss(cuboid_outputs, labels, num_positives_sum),
+      'cuboid_yaw': 
+        self.yaw_loss(cuboid_outputs, labels, num_positives_sum),
+      'cuboid_size': 
+        self.size_loss(cuboid_outputs, labels, num_positives_sum),
+    }
+    return cuboid_losses
+  
+  def center_loss(self, cuboid_outputs, labels, num_positives_sum):
+    center_losses = []
+    for level, pred_xy in cuboid_outputs['cuboid_center'].keys():
+      label_x = labels['cuboid/box/center_x'][level]
+      label_y = labels['cuboid/box/center_y'][level]
+      label_xy = tf.concat([
+                    tf.expand_dims(label_x, axis=1),
+                    tf.expand_dims(label_y, axis=1)],
+                    axis=1)
+      center_losses.append(
+        self._regression_loss(pred_xy, label_xy, num_positives_sum))
+    # Sums per level losses to total loss.
+    return tf.add_n(center_losses)
+
+  def depth_loss(self, cuboid_outputs, labels, num_positives_sum):
+    depth_losses = []
+    for level, pred_depth in cuboid_outputs['cuboid_depth'].keys():
+      label_depth = labels['cuboid/box/center_depth'][level]
+
+      # Following Hu et al., we predict inverse depth.  The authors
+      # may have adjusted for the <1m region due to the poor quality
+      # of boxes that close to the camera.
+      # https://github.com/ucbdrive/3d-vehicle-tracking/blob/ce54b2461c8983aef265ed043dec976c6035d431/3d-tracking/utils/network_utils.py#L115
+      target_depth = 1. / label_depth - 1.
+
+      depth_losses.append(
+        self._regression_loss(pred_depth, target_depth, num_positives_sum))
+    # Sums per level losses to total loss.
+    return tf.add_n(depth_losses)
+
+  def yaw_loss(self, cuboid_outputs, labels, num_positives_sum):
+    yaw_losses = []
+    for level, yaw_preds in cuboid_outputs['cuboid_depth'].keys():
+      label_depth = labels['cuboid/box/center_depth'][level]
+
+      # Following Hu et al., we predict inverse depth.  The authors
+      # may have adjusted for the <1m region due to the poor quality
+      # of boxes that close to the camera.
+      # https://github.com/ucbdrive/3d-vehicle-tracking/blob/ce54b2461c8983aef265ed043dec976c6035d431/3d-tracking/utils/network_utils.py#L115
+      target_depth = 1. / label_depth - 1.
+
+      yaw_losses.append(
+        self._regression_loss(pred_depth, target_depth, num_positives_sum))
+    # Sums per level losses to total loss.
+    return tf.add_n(yaw_losses)
+
+  def size_loss(self, cuboid_outputs, labels, num_positives_sum):
+    size_losses = []
+    for level, pred_lwh in cuboid_outputs['cuboid_size'].keys():
+      label_l = labels['cuboid/length'][level]
+      label_w = labels['cuboid/width'][level]
+      label_h = labels['cuboid/height'][level]
+      label_lwh = tf.concat([
+                    tf.expand_dims(label_l, axis=1),
+                    tf.expand_dims(label_w, axis=1),
+                    tf.expand_dims(label_h, axis=1)],
+                    axis=1)
+      size_losses.append(
+        self._regression_loss(pred_lwh, label_lwh, num_positives_sum))
+    # Sums per level losses to total loss.
+    return tf.add_n(size_losses)
+
+  def _regression_loss(self, r_outputs, r_targets, num_positives,
+                 ignore_label=-2):
+    """Computes a RetinaNet regression loss."""
+    r_dims = r_targets.get_shape().as_list()[0]
+
+    normalizer = num_positives * r_dims
+    r_loss = tf.losses.huber_loss(
+        r_targets,
+        r_outputs,
+        delta=self._cuboid_huber_loss_delta,
+        reduction=tf.losses.Reduction.SUM)
+    r_loss /= normalizer
+    
+    # FIXME ignore_label value ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    ignore_loss = tf.where(tf.equal(r_targets, ignore_label),
+                           tf.zeros_like(r_targets, dtype=tf.float32),
+                           tf.ones_like(r_targets, dtype=tf.float32),)
+    ignore_loss = tf.expand_dims(ignore_loss, -1)
+    ignore_loss = tf.tile(ignore_loss, [1, 1, 1, 1, r_dims])
+    ignore_loss = tf.reshape(ignore_loss, tf.shape(loss))
+    return tf.reduce_sum(ignore_loss * r_loss)
+
+  def box_loss(self, box_outputs, box_targets, num_positives):
+    """Computes RetinaNet box regression loss."""
+    # The delta is typically around the mean value of regression target.
+    # for instances, the regression targets of 512x512 input with 6 anchors on
+    # P3-P7 pyramid is about [0.1, 0.1, 0.2, 0.2].
+    normalizer = num_positives * 4.0
+    mask = tf.not_equal(box_targets, 0.0)
+    box_loss = tf.losses.huber_loss(
+        box_targets,
+        box_outputs,
+        weights=mask,
+        delta=self._huber_loss_delta,
+        reduction=tf.losses.Reduction.SUM)
+    box_loss /= normalizer
+    return box_loss
 
 class ShapemaskMseLoss(object):
   """ShapeMask mask Mean Squared Error loss function wrapper."""
