@@ -55,11 +55,12 @@ class RetinanetModel(base_model.Model):
         features, is_training=(mode == mode_keys.TRAIN))
     fpn_features = self._fpn_fn(
         backbone_features, is_training=(mode == mode_keys.TRAIN))
-    cls_outputs, box_outputs = self._head_fn(
+    cls_outputs, box_outputs, cuboid_outputs = self._head_fn(
         fpn_features, is_training=(mode == mode_keys.TRAIN))
     model_outputs = {
         'cls_outputs': cls_outputs,
         'box_outputs': box_outputs,
+        'cuboid_outputs': cuboid_outputs,
     }
 
     # Print number of parameters and FLOPS in model.
@@ -76,6 +77,7 @@ class RetinanetModel(base_model.Model):
           'detection_boxes': boxes,
           'detection_classes': classes,
           'detection_scores': scores,
+          # TODO generate cuboids ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
       })
     return model_outputs
 
@@ -86,6 +88,9 @@ class RetinanetModel(base_model.Model):
       features = tf.transpose(features, [3, 0, 1, 2])
 
     outputs = self.model_outputs(features, labels, mode=mode_keys.TRAIN)
+
+    # Now for losses!!
+    assert False
 
     # Adds RetinaNet model losses.
     cls_loss = self._cls_loss_fn(

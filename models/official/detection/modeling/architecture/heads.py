@@ -290,6 +290,8 @@ class RetinanetHead(object):
                num_convs=4,
                num_filters=256,
                use_separable_conv=False,
+               predict_cuboids=False,
+               cuboid_yaw_num_bins=8,
                batch_norm_relu=nn_ops.BatchNormRelu()):
     """Initialize params to build RetinaNet head.
 
@@ -315,6 +317,8 @@ class RetinanetHead(object):
     self._num_convs = num_convs
     self._num_filters = num_filters
     self._use_separable_conv = use_separable_conv
+    self._predict_cuboids = predict_cuboids
+    self._cuboid_yaw_num_bins = cuboid_yaw_num_bins
 
     self._batch_norm_relu = batch_norm_relu
 
@@ -322,6 +326,7 @@ class RetinanetHead(object):
     """Returns outputs of RetinaNet head."""
     class_outputs = {}
     box_outputs = {}
+    cuboid_outputs = {}
     with tf.variable_scope('retinanet'):
       for level in range(self._min_level, self._max_level + 1):
         features = fpn_features[level]
@@ -331,6 +336,10 @@ class RetinanetHead(object):
         with tf.variable_scope('box_net', reuse=tf.AUTO_REUSE):
           box_outputs[level] = self.box_net(
               features, level, is_training=is_training)
+        if self._predict_cuboids:
+          with tf.variable_scope('cuboid_net', reuse=tf.AUTO_REUSE):
+            cuboid_outputs[level] = self.cuboid_net(
+                features, level, is_training=is_training)
     return class_outputs, box_outputs
 
   def class_net(self, features, level, is_training):
@@ -411,6 +420,59 @@ class RetinanetHead(object):
         name='box-predict')
     return boxes
 
+  def cuboid_net(self, base_features, level, is_training=False):
+    """Cuboid regression network for RetinaNet."""
+    
+    # TODO cleanup
+    # separate heads for separate properties
+    # https://github.com/ucbdrive/3d-vehicle-tracking/blob/ce54b2461c8983aef265ed043dec976c6035d431/3d-tracking/model/model.py#L33
+
+    def create_head(name, num_outputs):
+      features = base_features
+      for i in range(self._num_convs):
+        if self._use_separable_conv:
+          conv2d_op = functools.partial(
+              tf.layers.separable_conv2d, depth_multiplier=1)
+        else:
+          conv2d_op = functools.partial(
+              tf.layers.conv2d, kernel_initializer=tf.random_normal_initializer(
+                  stddev=0.01))
+        features = conv2d_op(
+            features,
+            self._num_filters,
+            kernel_size=(3, 3),
+            activation=None,
+            bias_initializer=tf.zeros_initializer(),
+            padding='same',
+            name='cuboid-%s-%s' % (name, i))
+        # The convolution layers in the box net are shared among all levels, but
+        # each level has its batch normlization to capture the statistical
+        # difference among different levels.
+        features = self._batch_norm_relu(
+          features, is_training=is_training,
+          name='cuboid-%s-%d-%d'%(name, i, level))
+      if self._use_separable_conv:
+        conv2d_op = functools.partial(
+            tf.layers.separable_conv2d, depth_multiplier=1)
+      else:
+        conv2d_op = functools.partial(
+            tf.layers.conv2d, kernel_initializer=tf.random_normal_initializer(
+                stddev=1e-5))
+      head = conv2d_op(
+          features,
+          num_outputs,
+          kernel_size=(3, 3),
+          bias_initializer=tf.zeros_initializer(),
+          padding='same',
+          name='%s-predict' % name)
+    
+    name_to_head = {
+      'cuboid-center': create_head('center', 2),
+      'cuboid-depth': create_head('depth', 1),
+      'cuboid-yaw': create_head('yaw', self._cuboid_yaw_num_bins),
+      'cuboid-size': create_head('size', 3),
+    }
+    return name_to_head
 
 class ShapemaskPriorHead(object):
   """ShapeMask Prior head."""

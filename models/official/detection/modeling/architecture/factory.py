@@ -93,6 +93,8 @@ def retinanet_head_generator(params):
       params.retinanet_head_num_convs,
       params.retinanet_head_num_filters,
       params.use_separable_conv,
+      predict_cuboids=params.predict_cuboids,
+      cuboid_yaw_num_bins=params.cuboid_yaw_num_bins,
       batch_norm_relu=batch_norm_relu_generator(params.batch_norm))
 
 

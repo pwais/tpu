@@ -58,6 +58,8 @@ RETINANET_CFG.override({
             'batch_norm_trainable': True,
             'use_sync_bn': False,
         },
+        'predict_cuboids': False,
+        'cuboid_yaw_num_bins': 8,
     },
     'retinanet_loss': {
         'num_classes': 91,
