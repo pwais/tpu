@@ -189,7 +189,7 @@ class Parser(object):
 
   ## Cuboid Utils
 
-  def __get_cuboid_targets(self, data, anchor_labeler, indices):
+  def __get_cuboid_targets(self, data, anchor_labeler, boxes, indices):
     if not self._include_cuboids:
       return {}
     
@@ -212,11 +212,11 @@ class Parser(object):
       cuboid_targets[target_key] = t_targets
     return cuboid_targets
 
-  def __maybe_add_cuboid_gts(self, groundtruths, data)
-      if self._include_cuboids:
-        for key in data.keys():
-          if key.startswith('cuboid/'):
-            groundtruths[key] = data[key]
+  def __maybe_add_cuboid_gts(self, groundtruths, data):
+    if self._include_cuboids:
+      for key in data.keys():
+        if key.startswith('cuboid/'):
+          groundtruths[key] = data[key]
 
 
   ## One Parse function per mode
@@ -317,7 +317,7 @@ class Parser(object):
 
     if self._include_cuboids:
       labels['cuboid_targets'] = self.__get_cuboid_targets(
-                                        data, anchor_labeler, indices)
+                                        data, anchor_labeler, boxes, indices)
 
     return image, labels
 
@@ -405,7 +405,7 @@ class Parser(object):
 
     if self._include_cuboids:
       labels['cuboid_targets'] = self.__get_cuboid_targets(
-                                        data, anchor_labeler, indices)
+                                        data, anchor_labeler, boxes, indices)
 
     return image, labels
 
@@ -492,7 +492,7 @@ class Parser(object):
 
       if self._include_cuboids:
         labels['cuboid_targets'] = self.__get_cuboid_targets(
-                                        data, anchor_labeler, indices)
+                                        data, anchor_labeler, boxes, indices)
 
     return {
         'images': image,

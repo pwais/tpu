@@ -182,9 +182,6 @@ class AnchorLabeler(object):
     # The cls_weights, box_weights are not used.
     cls_targets, _, box_targets, _, matches = self._target_assigner.assign(
         anchor_box_list, gt_box_list, gt_labels)
-
-    tf.logging.info(
-      "Number of anchor boxes: %s" % anchor_box_list.num_boxes_static())
     
     # Labels definition in matches.match_results:
     # (1) match_results[i]>=0, meaning that column i is matched with row
