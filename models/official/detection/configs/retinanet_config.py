@@ -40,6 +40,7 @@ RETINANET_CFG.override({
         'skip_crowd_during_training': True,
         'max_num_instances': 100,
         'regenerate_source_id': False,
+        'include_cuboids': False,
     },
     'retinanet_head': {
         'min_level': 3,

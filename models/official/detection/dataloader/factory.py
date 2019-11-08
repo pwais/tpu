@@ -46,7 +46,8 @@ def parser_generator(params, mode):
         max_num_instances=parser_params.max_num_instances,
         use_bfloat16=parser_params.use_bfloat16,
         mode=mode,
-        regenerate_source_id=parser_params.regenerate_source_id)
+        regenerate_source_id=parser_params.regenerate_source_id,
+        include_cuboids=parser_params.include_cuboids)
   elif params.architecture.parser == 'maskrcnn_parser':
     anchor_params = params.anchor
     parser_params = params.maskrcnn_parser
