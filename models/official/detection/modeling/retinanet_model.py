@@ -146,7 +146,8 @@ class RetinanetModel(base_model.Model):
         'pred_detection_boxes': outputs['detection_boxes'],
         'pred_detection_classes': outputs['detection_classes'],
         'pred_detection_scores': outputs['detection_scores'],
-        'pred_cuboids': outputs['cuboid_outputs'],
+        #'pred_cuboids': outputs['cuboid_outputs'],
+        # fixme
     }
 
     if 'groundtruths' in labels:

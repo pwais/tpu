@@ -489,7 +489,7 @@ class RetinanetCuboidLoss(object):
       'cuboid_yaw': 
         self.yaw_loss(cuboid_outputs, labels, num_positives_sum),
       'cuboid_size': 
-        self.size_loss(cuboid_outputs, labels, num_positives_sum),
+         self.size_loss(cuboid_outputs, labels, num_positives_sum),
     }
     return cuboid_losses
   
@@ -561,37 +561,55 @@ class RetinanetCuboidLoss(object):
       pred_cos_th /= normalizer
       pred_sin_th /= normalizer
 
-      bin_loss = tf.nn.softmax_cross_entropy_with_logits(
-                  labels=target_bin, logits=pred_bin,
-                  name='bin_loss_%s' % level)
+      # Less numerical stability, but our dimensionality is small
+      pred_bin_softmax = tf.nn.softmax(pred_bin)
+      bin_loss = -1 * target_bin * tf.log(pred_bin_softmax)
+      # bin_loss = tf.nn.softmax_cross_entropy_with_logits(
+      #             labels=target_bin, logits=pred_bin,
+      #             name='bin_loss_%s' % level)
 
       cos_resid_loss = tf.losses.huber_loss(
                           target_residual_cos_th,
                           pred_cos_th,
                           delta=0.01, # TODO tune to bin_size_rad ~~~~~~~~~~~~~~~~~~~~
-                          reduction=tf.losses.Reduction.SUM)
+                          reduction=tf.losses.Reduction.NONE)
       sin_resid_loss = tf.losses.huber_loss(
                           target_residual_sin_th,
                           pred_sin_th,
                           delta=0.01, # TODO tune to bin_size_rad ~~~~~~~~~~~~~~~~~~~~~~~
-                          reduction=tf.losses.Reduction.SUM)
+                          reduction=tf.losses.Reduction.NONE)
+      def filter_loss(l):
+        return tf.where(tf.equal(target_yaw, ignore_label),
+                           tf.zeros_like(target_yaw, dtype=tf.float32),
+                           l)
+      
+      bin_loss = tf.check_numerics(filter_loss(bin_loss), 'moofbin')
+      cos_resid_loss = tf.check_numerics(filter_loss(cos_resid_loss), 'cos_resid_loss')
+      sin_resid_loss = tf.check_numerics(filter_loss(sin_resid_loss), 'sin_resid_loss')
       yaw_loss = bin_loss + cos_resid_loss + sin_resid_loss
 
-      ignore_loss = tf.where(tf.equal(label_yaw, ignore_label),
-                           tf.zeros_like(label_yaw, dtype=tf.float32),
-                           tf.ones_like(label_yaw, dtype=tf.float32))
+
+      # yaw_loss = tf.where(tf.equal(target_yaw, ignore_label),
+      #                      tf.zeros_like(target_yaw, dtype=tf.float32),
+      #                      yaw_loss)
+      yaw_loss /= num_positives_sum
+      yaw_loss = tf.reduce_sum(yaw_loss)
+
       # ignore_loss = tf.where(tf.equal(label_yaw, ignore_label),
-      #                       tf.zeros_like(label_yaw, dtype=tf.float32),
-      #                       tf.ones_like(label_yaw, dtype=tf.float32),)
-      # ignore_loss = tf.expand_dims(ignore_loss, -1)
-      # ignore_loss = tf.tile(ignore_loss, [1, 1, 1, 1, yaw_head_n_vals])
-      # import pdb; pdb.set_trace()
-      # ignore_loss = tf.reshape(ignore_loss, tf.shape(yaw_loss))
+      #                      tf.zeros_like(label_yaw, dtype=tf.float32),
+      #                      tf.ones_like(label_yaw, dtype=tf.float32))
+      # # ignore_loss = tf.where(tf.equal(label_yaw, ignore_label),
+      # #                       tf.zeros_like(label_yaw, dtype=tf.float32),
+      # #                       tf.ones_like(label_yaw, dtype=tf.float32),)
+      # # ignore_loss = tf.expand_dims(ignore_loss, -1)
+      # # ignore_loss = tf.tile(ignore_loss, [1, 1, 1, 1, yaw_head_n_vals])
+      # # import pdb; pdb.set_trace()
+      # # ignore_loss = tf.reshape(ignore_loss, tf.shape(yaw_loss))
 
-      filtered_yaw_loss = tf.reduce_sum(
-        ignore_loss * yaw_loss, name='filtered_yaw_loss_%s' % level)
+      # filtered_yaw_loss = tf.reduce_sum(
+      #   ignore_loss * yaw_loss, name='filtered_yaw_loss_%s' % level)
 
-      yaw_losses.append(filtered_yaw_loss)
+      yaw_losses.append(yaw_loss)
     
     # Sums per level losses to total loss.
     total_loss = tf.add_n(yaw_losses) / num_positives_sum
@@ -624,16 +642,20 @@ class RetinanetCuboidLoss(object):
         r_targets,
         r_outputs,
         delta=self._cuboid_huber_loss_delta,
-        reduction=tf.losses.Reduction.SUM)
+        reduction=tf.losses.Reduction.NONE)
     r_loss /= normalizer
-    
-    ignore_loss = tf.where(tf.equal(r_targets, ignore_label),
+    r_loss = tf.where(tf.equal(r_targets, ignore_label),
                            tf.zeros_like(r_targets, dtype=tf.float32),
-                           tf.ones_like(r_targets, dtype=tf.float32))
-    ignore_loss = tf.expand_dims(ignore_loss, -1)
-    # ignore_loss = tf.tile(ignore_loss, [1, 1, 1, 1, r_dims])
-    # ignore_loss = tf.reshape(ignore_loss, tf.shape(r_loss))
-    return tf.reduce_sum(ignore_loss * r_loss)
+                           r_loss)
+    return tf.reduce_sum(r_loss)
+    
+    # ignore_loss = tf.where(tf.equal(r_targets, ignore_label),
+    #                        tf.zeros_like(r_targets, dtype=tf.float32),
+    #                        tf.ones_like(r_targets, dtype=tf.float32))
+    # ignore_loss = tf.expand_dims(ignore_loss, -1)
+    # # ignore_loss = tf.tile(ignore_loss, [1, 1, 1, 1, r_dims])
+    # # ignore_loss = tf.reshape(ignore_loss, tf.shape(r_loss))
+    # return tf.reduce_sum(ignore_loss * r_loss)
 
 
 class ShapemaskMseLoss(object):
