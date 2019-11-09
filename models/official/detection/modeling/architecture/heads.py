@@ -427,7 +427,7 @@ class RetinanetHead(object):
     # separate heads for separate properties
     # https://github.com/ucbdrive/3d-vehicle-tracking/blob/ce54b2461c8983aef265ed043dec976c6035d431/3d-tracking/model/model.py#L33
 
-    def create_head(name, num_outputs):
+    def create_head(name, num_outputs, top_activation=None):
       features = base_features
       for i in range(self._num_convs):
         if self._use_separable_conv:
@@ -464,6 +464,8 @@ class RetinanetHead(object):
           kernel_size=(3, 3),
           bias_initializer=tf.zeros_initializer(),
           padding='same')
+      if top_activation:
+        head = top_activation(head)
       b, h, w = head.get_shape().as_list()[:3]
       head = tf.reshape(
               head,
@@ -473,7 +475,7 @@ class RetinanetHead(object):
     
     name_to_head = {
       'cuboid_center': create_head('center', 2),
-      'cuboid_depth': create_head('depth', 1),
+      'cuboid_depth': create_head('depth', 1, top_activation=tf.math.sigmoid),
       'cuboid_yaw': create_head('yaw', 3 * self._cuboid_yaw_num_bins),
       'cuboid_size': create_head('size', 3),
     }

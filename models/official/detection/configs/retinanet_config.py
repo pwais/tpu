@@ -68,6 +68,7 @@ RETINANET_CFG.override({
         'huber_loss_delta': 0.1,
         'box_loss_weight': 50,
         'cuboid_loss_weight': 0.1,
+        'cuboid_yaw_loss_weight': 0.001,
         'cuboid_yaw_num_bins': 8,
         'include_cuboid_loss': False,
         'cuboid_huber_loss_delta': 0.1,

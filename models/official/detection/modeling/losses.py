@@ -458,6 +458,7 @@ class RetinanetCuboidLoss(object):
 
   def __init__(self, params):
     self._cuboid_yaw_num_bins = params.cuboid_yaw_num_bins
+    self._cuboid_yaw_loss_weight = params.cuboid_yaw_loss_weight
     self._cuboid_huber_loss_delta = params.cuboid_huber_loss_delta
 
   def __call__(self, cuboid_outputs, labels, num_positives):
@@ -485,11 +486,11 @@ class RetinanetCuboidLoss(object):
       'cuboid_center':
         self.center_loss(cuboid_outputs, labels, num_positives_sum),
       'cuboid_depth': 
-        1e-3 * self.depth_loss(cuboid_outputs, labels, num_positives_sum),
-      # 'cuboid_yaw': 
-      #    self.yaw_loss(cuboid_outputs, labels, num_positives_sum),
+        self.depth_loss(cuboid_outputs, labels, num_positives_sum),
+      'cuboid_yaw': 
+        self.yaw_loss(cuboid_outputs, labels, num_positives_sum),
       'cuboid_size': 
-         self.size_loss(cuboid_outputs, labels, num_positives_sum),
+        self.size_loss(cuboid_outputs, labels, num_positives_sum),
     }
     return cuboid_losses
   
@@ -527,11 +528,10 @@ class RetinanetCuboidLoss(object):
     yaw_losses = []
     for level in cuboid_outputs.keys():
       preds = cuboid_outputs[level]['cuboid_yaw']
-      preds = tf.identity(preds, name='preds_%s' % level)
+
       # preds = tf.check_numerics(preds, 'preds')
       label_yaw = labels['cuboid/box/perspective_yaw'][level]
-      label_yaw = tf.identity(label_yaw, name='label_yaw_%s' % level)
-      
+
       # Following both Hu et al. and Drago et al. (originators), we use
       # the multibin loss:
       # https://arxiv.org/pdf/1612.00496.pdf
@@ -558,16 +558,24 @@ class RetinanetCuboidLoss(object):
       
       yaw_head_n_vals = preds.get_shape().as_list()[-1]
       assert 3 * n_bins == yaw_head_n_vals
+      # GUH https://github.com/tensorflow/tensorflow/issues/2540
+      # Even if we mask the loss below, TF will backprop some NaN gradients
+      # into the net weights unless we mask them here.
+      mask = tf.expand_dims(label_yaw, -1)
+      mask = tf.tile(mask, [1, 1, 1, 1, yaw_head_n_vals])
+      preds = tf.where(
+                tf.equal(mask, ignore_label), tf.stop_gradient(preds), preds)
+
       pred_bin =    preds[:, :, :, :, 0:n_bins]
       pred_cos_th = preds[:, :, :, :, n_bins:2*n_bins]
       pred_sin_th = preds[:, :, :, :, 2*n_bins:]
-      normalizer = tf.sqrt(pred_cos_th ** 2 + pred_sin_th **2) + 1e-9
+      normalizer = tf.sqrt(pred_cos_th ** 2 + pred_sin_th **2 + 1e-9)
       pred_cos_th /= normalizer
       pred_sin_th /= normalizer
 
       # pred_cos_th = tf.check_numerics(pred_cos_th, 'pred_cos_th')
       # target_residual_cos_th = tf.check_numerics(target_residual_cos_th, 'target_residual_cos_th')
-
+      # tf.stop_gradient
       # # Less numerical stability, but our dimensionality is small
       # pred_bin_softmax = tf.nn.softmax(pred_bin)
       # bin_loss = -1 * target_bin * tf.log(pred_bin_softmax)
@@ -612,7 +620,7 @@ class RetinanetCuboidLoss(object):
       # import pdb; pdb.set_trace()
       # label_yaw = tf.check_numerics(label_yaw, 'label_yaw')
       # yaw_loss = tf.check_numerics(yaw_loss, 'yaw_loss')
-      yaw_loss = 1e-6 * tf.reduce_sum(yaw_loss)
+      yaw_loss = tf.reduce_sum(yaw_loss)
 
       # ignore_loss = tf.where(tf.equal(label_yaw, ignore_label),
       #                      tf.zeros_like(label_yaw, dtype=tf.float32),
@@ -632,7 +640,7 @@ class RetinanetCuboidLoss(object):
     
     # Sums per level losses to total loss.
     total_loss = tf.add_n(yaw_losses) / num_positives_sum
-    return total_loss
+    return self._cuboid_yaw_loss_weight * total_loss
 
   def size_loss(self, cuboid_outputs, labels, num_positives_sum):
     size_losses = []

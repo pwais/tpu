@@ -109,6 +109,7 @@ class RetinanetModel(base_model.Model):
 
     # Optionally add cuboid losses
     if self._cuboid_loss_fn is not None:
+        # FIXME ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
         ignore_label=float('-inf')
         for k, l_to_t in labels['cuboid_targets'].items():
             for level, ttensor in l_to_t.items():
