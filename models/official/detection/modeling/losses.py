@@ -458,7 +458,7 @@ class RetinanetCuboidLoss(object):
 
   def __init__(self, params):
     self._cuboid_yaw_num_bins = params.cuboid_yaw_num_bins
-    self._cuboid_huber_loss_delta = params._cuboid_huber_loss_delta
+    self._cuboid_huber_loss_delta = params.cuboid_huber_loss_delta
 
   def __call__(self, cuboid_outputs, labels, num_positives):
     """Computes cuboid estimation loss.
@@ -495,13 +495,11 @@ class RetinanetCuboidLoss(object):
   
   def center_loss(self, cuboid_outputs, labels, num_positives_sum):
     center_losses = []
-    for level, pred_xy in cuboid_outputs['cuboid_center'].keys():
-      label_x = labels['cuboid/box/center_x'][level]
-      label_y = labels['cuboid/box/center_y'][level]
-      label_xy = tf.concat([
-                    tf.expand_dims(label_x, axis=1),
-                    tf.expand_dims(label_y, axis=1)],
-                    axis=1)
+    for level in cuboid_outputs.keys():
+      pred_xy = cuboid_outputs[level]['cuboid_center']
+      label_x = tf.expand_dims(labels['cuboid/box/center_x'][level], -1)
+      label_y = tf.expand_dims(labels['cuboid/box/center_y'][level], -1)
+      label_xy = tf.concat([label_x, label_y], axis=-1)
       center_losses.append(
         self._regression_loss(pred_xy, label_xy, num_positives_sum))
     # Sums per level losses to total loss.
@@ -509,12 +507,12 @@ class RetinanetCuboidLoss(object):
 
   def depth_loss(self, cuboid_outputs, labels, num_positives_sum):
     depth_losses = []
-    for level, pred_depth in cuboid_outputs['cuboid_depth'].keys():
-      label_depth = labels['cuboid/box/center_depth'][level]
+    for level in cuboid_outputs.keys():
+      pred_depth = cuboid_outputs[level]['cuboid_depth']
+      label_depth = tf.expand_dims(
+        labels['cuboid/box/center_depth'][level], -1)
 
-      # Following Hu et al., we predict inverse depth.  The authors
-      # may have adjusted for the <1m region due to the poor quality
-      # of boxes that close to the camera.
+      # Following Hu et al., we predict inverse depth.
       # https://github.com/ucbdrive/3d-vehicle-tracking/blob/ce54b2461c8983aef265ed043dec976c6035d431/3d-tracking/utils/network_utils.py#L115
       target_depth = 1. / label_depth - 1.
 
@@ -524,10 +522,11 @@ class RetinanetCuboidLoss(object):
     return tf.add_n(depth_losses)
 
   def yaw_loss(self, cuboid_outputs, labels, num_positives_sum,
-                        ignore_label=-2):
+                        ignore_label=float('-inf')):
     n_bins = self._cuboid_yaw_num_bins
     yaw_losses = []
-    for level, preds in cuboid_outputs['cuboid_yaw'].keys():
+    for level in cuboid_outputs.keys():
+      preds = cuboid_outputs[level]['cuboid_yaw']
       label_yaw = labels['cuboid/box/perspective_yaw'][level]
       
       # Following both Hu et al. and Drago et al. (originators), we use
@@ -541,6 +540,8 @@ class RetinanetCuboidLoss(object):
         
       # Normalize to [0, 2pi]
       target_yaw = (label_yaw + 2*PI) % (2*PI)
+      target_yaw = tf.expand_dims(target_yaw, -1)
+      target_yaw = tf.tile(target_yaw, [1, 1, 1, 1, n_bins])
 
       bin_size_rad = (2*PI) / n_bins
       theta_bin = tf.range(0, 2*PI, bin_size_rad)
@@ -551,9 +552,11 @@ class RetinanetCuboidLoss(object):
       target_residual_cos_th = tf.math.cos(target_yaw) - cos_thb
       target_residual_sin_th = tf.math.sin(target_yaw) - sin_thb
       
-      pred_bin = preds[:, n_bins]
-      pred_cos_th = preds[:, n_bins:2*n_bins]
-      pred_sin_th = preds[:, 2*n_bins:]
+      yaw_head_n_vals = preds.get_shape().as_list()[-1]
+      assert 3 * n_bins == yaw_head_n_vals
+      pred_bin =    preds[:, :, :, :, 0:n_bins]
+      pred_cos_th = preds[:, :, :, :, n_bins:2*n_bins]
+      pred_sin_th = preds[:, :, :, :, 2*n_bins:]
       normalizer = tf.sqrt(pred_cos_th ** 2 + pred_sin_th **2)
       pred_cos_th /= normalizer
       pred_sin_th /= normalizer
@@ -565,22 +568,25 @@ class RetinanetCuboidLoss(object):
       cos_resid_loss = tf.losses.huber_loss(
                           target_residual_cos_th,
                           pred_cos_th,
-                          delta=0.01, # TODO tune to bin_size_rad
+                          delta=0.01, # TODO tune to bin_size_rad ~~~~~~~~~~~~~~~~~~~~
                           reduction=tf.losses.Reduction.SUM)
       sin_resid_loss = tf.losses.huber_loss(
                           target_residual_sin_th,
                           pred_sin_th,
-                          delta=0.01, # TODO tune to bin_size_rad
+                          delta=0.01, # TODO tune to bin_size_rad ~~~~~~~~~~~~~~~~~~~~~~~
                           reduction=tf.losses.Reduction.SUM)
       yaw_loss = bin_loss + cos_resid_loss + sin_resid_loss
 
-      # FIXME ignore_label value ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
       ignore_loss = tf.where(tf.equal(label_yaw, ignore_label),
-                            tf.zeros_like(label_yaw, dtype=tf.float32),
-                            tf.ones_like(label_yaw, dtype=tf.float32),)
-      ignore_loss = tf.expand_dims(ignore_loss, -1)
-      ignore_loss = tf.tile(ignore_loss, [1, 1, 1, 1, r_dims])
-      ignore_loss = tf.reshape(ignore_loss, tf.shape(loss))
+                           tf.zeros_like(label_yaw, dtype=tf.float32),
+                           tf.ones_like(label_yaw, dtype=tf.float32))
+      # ignore_loss = tf.where(tf.equal(label_yaw, ignore_label),
+      #                       tf.zeros_like(label_yaw, dtype=tf.float32),
+      #                       tf.ones_like(label_yaw, dtype=tf.float32),)
+      # ignore_loss = tf.expand_dims(ignore_loss, -1)
+      # ignore_loss = tf.tile(ignore_loss, [1, 1, 1, 1, yaw_head_n_vals])
+      # import pdb; pdb.set_trace()
+      # ignore_loss = tf.reshape(ignore_loss, tf.shape(yaw_loss))
 
       filtered_yaw_loss = tf.reduce_sum(
         ignore_loss * yaw_loss, name='filtered_yaw_loss_%s' % level)
@@ -593,24 +599,25 @@ class RetinanetCuboidLoss(object):
 
   def size_loss(self, cuboid_outputs, labels, num_positives_sum):
     size_losses = []
-    for level, pred_lwh in cuboid_outputs['cuboid_size'].keys():
+    for level in cuboid_outputs.keys():
+      pred_lwh = cuboid_outputs[level]['cuboid_size']
       label_l = labels['cuboid/length'][level]
       label_w = labels['cuboid/width'][level]
       label_h = labels['cuboid/height'][level]
       label_lwh = tf.concat([
-                    tf.expand_dims(label_l, axis=1),
-                    tf.expand_dims(label_w, axis=1),
-                    tf.expand_dims(label_h, axis=1)],
-                    axis=1)
+                    tf.expand_dims(label_l, axis=-1),
+                    tf.expand_dims(label_w, axis=-1),
+                    tf.expand_dims(label_h, axis=-1)],
+                    axis=-1)
       size_losses.append(
         self._regression_loss(pred_lwh, label_lwh, num_positives_sum))
     # Sums per level losses to total loss.
     return tf.add_n(size_losses)
 
   def _regression_loss(self, r_outputs, r_targets, num_positives,
-                 ignore_label=-2):
+                 ignore_label=float('-inf')):
     """Computes a RetinaNet regression loss."""
-    r_dims = r_targets.get_shape().as_list()[0]
+    r_dims = r_targets.get_shape().as_list()[-1]
 
     normalizer = num_positives * r_dims
     r_loss = tf.losses.huber_loss(
@@ -620,13 +627,12 @@ class RetinanetCuboidLoss(object):
         reduction=tf.losses.Reduction.SUM)
     r_loss /= normalizer
     
-    # FIXME ignore_label value ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     ignore_loss = tf.where(tf.equal(r_targets, ignore_label),
                            tf.zeros_like(r_targets, dtype=tf.float32),
-                           tf.ones_like(r_targets, dtype=tf.float32),)
+                           tf.ones_like(r_targets, dtype=tf.float32))
     ignore_loss = tf.expand_dims(ignore_loss, -1)
-    ignore_loss = tf.tile(ignore_loss, [1, 1, 1, 1, r_dims])
-    ignore_loss = tf.reshape(ignore_loss, tf.shape(loss))
+    # ignore_loss = tf.tile(ignore_loss, [1, 1, 1, 1, r_dims])
+    # ignore_loss = tf.reshape(ignore_loss, tf.shape(r_loss))
     return tf.reduce_sum(ignore_loss * r_loss)
 
 

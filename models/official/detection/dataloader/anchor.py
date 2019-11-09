@@ -156,7 +156,7 @@ class AnchorLabeler(object):
     self._match_threshold = match_threshold
     self._unmatched_threshold = unmatched_threshold
 
-  def label_anchors(self, gt_boxes, gt_labels):
+  def label_anchors(self, gt_boxes, gt_labels, unmatched_value=None):
     """Labels anchors with ground truth inputs.
 
     Args:
@@ -164,6 +164,8 @@ class AnchorLabeler(object):
         For each row, it stores [y0, x0, y1, x1] for four corners of a box.
       gt_labels: A integer tensor with shape [N, 1] representing groundtruth
         classes.
+      unmatched_value: By default, unmatched / ignored boxes have a value of
+        -1 or -2 (respectively). If not None, use this value instead.
     Returns:
       cls_targets_dict: ordered dictionary with keys
         [min_level, min_level+1, ..., max_level]. The values are tensor with
@@ -189,11 +191,18 @@ class AnchorLabeler(object):
     # (2) match_results[i]=-1, meaning that column i is not matched.
     # (3) match_results[i]=-2, meaning that column i is ignored.
     match_results = tf.expand_dims(matches.match_results, axis=1)
-    cls_targets = tf.cast(cls_targets, tf.int32)
-    cls_targets = tf.where(tf.equal(match_results, -1),
-                           -tf.ones_like(cls_targets), cls_targets)
-    cls_targets = tf.where(tf.equal(match_results, -2),
-                           -2*tf.ones_like(cls_targets), cls_targets)
+    if unmatched_value is None:
+      cls_targets = tf.cast(cls_targets, tf.int32)
+      cls_targets = tf.where(tf.equal(match_results, -1),
+                            -tf.ones_like(cls_targets), cls_targets)
+      cls_targets = tf.where(tf.equal(match_results, -2),
+                            -2*tf.ones_like(cls_targets), cls_targets)
+    else:
+      unmatched = unmatched_value * tf.ones_like(cls_targets)
+      cls_targets = tf.where(
+                      tf.equal(match_results, -1), unmatched, cls_targets)
+      cls_targets = tf.where(
+                      tf.equal(match_results, -2), unmatched, cls_targets)
 
     # Unpacks labels into multi-level representations.
     cls_targets_dict = self._anchor.unpack_labels(cls_targets)

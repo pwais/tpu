@@ -110,7 +110,7 @@ class RetinanetModel(base_model.Model):
     # Optionally add cuboid losses
     if self._cuboid_loss_fn is not None:
         cuboid_losses = self._cuboid_loss_fn(
-            outputs['cuboid_outputs', labels['cuboid_targets'],
+            outputs['cuboid_outputs'], labels['cuboid_targets'],
             labels['num_positives'])
         for cuboid_prop, loss_value in cuboid_losses.items():
             model_loss = model_loss + self._cuboid_loss_weight * loss_value
@@ -184,7 +184,7 @@ class RetinanetModel(base_model.Model):
       # Optionally add cuboid losses
       if self._cuboid_loss_fn is not None:
         cuboid_losses = self._cuboid_loss_fn(
-            outputs['cuboid_outputs', labels['cuboid_targets'],
+            outputs['cuboid_outputs'], labels['cuboid_targets'],
             labels['num_positives'])
         for cuboid_prop, loss_value in cuboid_losses.items():
           model_loss = model_loss + self._cuboid_loss_weight * loss_value

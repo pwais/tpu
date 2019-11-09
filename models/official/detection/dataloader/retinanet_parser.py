@@ -206,9 +206,10 @@ class Parser(object):
     for target_key in CUBOID_TARGET_KEYS:
       target_gt = data[target_key]
       targets = tf.gather(target_gt, indices)
+      gt_labels = tf.cast(tf.expand_dims(targets, axis=1), tf.float32)
+      gt_labels = tf.identity(gt_labels, name=target_key)
       t_targets, t_box_targets, _ = anchor_labeler.label_anchors(
-        boxes,
-        tf.cast(tf.expand_dims(targets, axis=1), tf.float32))
+        boxes, gt_labels, unmatched_value=float('-inf'))
       cuboid_targets[target_key] = t_targets
     return cuboid_targets
 

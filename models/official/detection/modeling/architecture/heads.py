@@ -340,7 +340,7 @@ class RetinanetHead(object):
           with tf.variable_scope('cuboid_net', reuse=tf.AUTO_REUSE):
             cuboid_outputs[level] = self.cuboid_net(
                 features, level, is_training=is_training)
-    return class_outputs, box_outputs
+    return class_outputs, box_outputs, cuboid_outputs
 
   def class_net(self, features, level, is_training):
     """Class prediction network for RetinaNet."""
@@ -444,13 +444,13 @@ class RetinanetHead(object):
             activation=None,
             bias_initializer=tf.zeros_initializer(),
             padding='same',
-            name='cuboid-%s-%s' % (name, i))
+            name='cuboid_%s_%s_%s' % (name, level, i))
         # The convolution layers in the box net are shared among all levels, but
         # each level has its batch normlization to capture the statistical
         # difference among different levels.
         features = self._batch_norm_relu(
           features, is_training=is_training,
-          name='cuboid-%s-%d-%d'%(name, i, level))
+          name='cuboid_%s_%s_%s'% (name, level, i))
       if self._use_separable_conv:
         conv2d_op = functools.partial(
             tf.layers.separable_conv2d, depth_multiplier=1)
@@ -460,11 +460,16 @@ class RetinanetHead(object):
                 stddev=1e-5))
       head = conv2d_op(
           features,
-          num_outputs,
+          self._anchors_per_location * num_outputs,
           kernel_size=(3, 3),
           bias_initializer=tf.zeros_initializer(),
-          padding='same',
-          name='%s-predict' % name)
+          padding='same')
+      b, h, w = head.get_shape().as_list()[:3]
+      head = tf.reshape(
+              head,
+              [b, h, w, self._anchors_per_location, num_outputs],
+              name='cuboid_%s_predict_%s' % (name, level))
+      return head
     
     name_to_head = {
       'cuboid_center': create_head('center', 2),
