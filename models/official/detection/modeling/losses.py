@@ -523,21 +523,73 @@ class RetinanetCuboidLoss(object):
     # Sums per level losses to total loss.
     return tf.add_n(depth_losses)
 
-  def yaw_loss(self, cuboid_outputs, labels, num_positives_sum):
+  def yaw_loss(self, cuboid_outputs, labels, num_positives_sum,
+                        ignore_label=-2):
+    n_bins = self._cuboid_yaw_num_bins
     yaw_losses = []
-    for level, yaw_preds in cuboid_outputs['cuboid_depth'].keys():
-      label_depth = labels['cuboid/box/center_depth'][level]
+    for level, preds in cuboid_outputs['cuboid_yaw'].keys():
+      label_yaw = labels['cuboid/box/perspective_yaw'][level]
+      
+      # Following both Hu et al. and Drago et al. (originators), we use
+      # the multibin loss:
+      # https://arxiv.org/pdf/1612.00496.pdf
+      # https://cs.gmu.edu/~amousavi/papers/3D-Deepbox-Supplementary.pdf
+      # NOPE Adapted from:
+      # NOPE https://github.com/ucbdrive/3d-vehicle-tracking/blob/2bb6b23fcfa1fbb5982ce7fe1a8471df18777518/3d-tracking/utils/network_utils.py#L24
 
-      # Following Hu et al., we predict inverse depth.  The authors
-      # may have adjusted for the <1m region due to the poor quality
-      # of boxes that close to the camera.
-      # https://github.com/ucbdrive/3d-vehicle-tracking/blob/ce54b2461c8983aef265ed043dec976c6035d431/3d-tracking/utils/network_utils.py#L115
-      target_depth = 1. / label_depth - 1.
+      PI = 3.141592653589793
+        
+      # Normalize to [0, 2pi]
+      target_yaw = (label_yaw + 2*PI) % (2*PI)
 
-      yaw_losses.append(
-        self._regression_loss(pred_depth, target_depth, num_positives_sum))
+      bin_size_rad = (2*PI) / n_bins
+      theta_bin = tf.range(0, 2*PI, bin_size_rad)
+      cos_thb = tf.math.cos(theta_bin)
+      sin_thb = tf.math.sin(theta_bin)
+
+      target_bin = tf.math.abs(target_yaw - theta_bin) / bin_size_rad
+      target_residual_cos_th = tf.math.cos(target_yaw) - cos_thb
+      target_residual_sin_th = tf.math.sin(target_yaw) - sin_thb
+      
+      pred_bin = preds[:, n_bins]
+      pred_cos_th = preds[:, n_bins:2*n_bins]
+      pred_sin_th = preds[:, 2*n_bins:]
+      normalizer = tf.sqrt(pred_cos_th ** 2 + pred_sin_th **2)
+      pred_cos_th /= normalizer
+      pred_sin_th /= normalizer
+
+      bin_loss = tf.nn.softmax_cross_entropy_with_logits(
+                  labels=target_bin, logits=pred_bin,
+                  name='bin_loss_%s' % level)
+
+      cos_resid_loss = tf.losses.huber_loss(
+                          target_residual_cos_th,
+                          pred_cos_th,
+                          delta=0.01, # TODO tune to bin_size_rad
+                          reduction=tf.losses.Reduction.SUM)
+      sin_resid_loss = tf.losses.huber_loss(
+                          target_residual_sin_th,
+                          pred_sin_th,
+                          delta=0.01, # TODO tune to bin_size_rad
+                          reduction=tf.losses.Reduction.SUM)
+      yaw_loss = bin_loss + cos_resid_loss + sin_resid_loss
+
+      # FIXME ignore_label value ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+      ignore_loss = tf.where(tf.equal(label_yaw, ignore_label),
+                            tf.zeros_like(label_yaw, dtype=tf.float32),
+                            tf.ones_like(label_yaw, dtype=tf.float32),)
+      ignore_loss = tf.expand_dims(ignore_loss, -1)
+      ignore_loss = tf.tile(ignore_loss, [1, 1, 1, 1, r_dims])
+      ignore_loss = tf.reshape(ignore_loss, tf.shape(loss))
+
+      filtered_yaw_loss = tf.reduce_sum(
+        ignore_loss * yaw_loss, name='filtered_yaw_loss_%s' % level)
+
+      yaw_losses.append(filtered_yaw_loss)
+    
     # Sums per level losses to total loss.
-    return tf.add_n(yaw_losses)
+    total_loss = tf.add_n(yaw_losses) / num_positives_sum
+    return total_loss
 
   def size_loss(self, cuboid_outputs, labels, num_positives_sum):
     size_losses = []
@@ -577,21 +629,6 @@ class RetinanetCuboidLoss(object):
     ignore_loss = tf.reshape(ignore_loss, tf.shape(loss))
     return tf.reduce_sum(ignore_loss * r_loss)
 
-  def box_loss(self, box_outputs, box_targets, num_positives):
-    """Computes RetinaNet box regression loss."""
-    # The delta is typically around the mean value of regression target.
-    # for instances, the regression targets of 512x512 input with 6 anchors on
-    # P3-P7 pyramid is about [0.1, 0.1, 0.2, 0.2].
-    normalizer = num_positives * 4.0
-    mask = tf.not_equal(box_targets, 0.0)
-    box_loss = tf.losses.huber_loss(
-        box_targets,
-        box_outputs,
-        weights=mask,
-        delta=self._huber_loss_delta,
-        reduction=tf.losses.Reduction.SUM)
-    box_loss /= normalizer
-    return box_loss
 
 class ShapemaskMseLoss(object):
   """ShapeMask mask Mean Squared Error loss function wrapper."""

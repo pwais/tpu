@@ -43,11 +43,13 @@ class RetinanetModel(base_model.Model):
     self._cls_loss_fn = losses.RetinanetClassLoss(params.retinanet_loss)
     self._box_loss_fn = losses.RetinanetBoxLoss(params.retinanet_loss)
     self._cuboid_loss_fn = None
+    self._predict_cuboids = False
     if params.retinanet_loss.include_cuboid_loss:
-        self._cuboid_loss_fn = \
-            losses.RetinanetCuboidLoss(params.retinanet_loss)
+      self._cuboid_loss_fn = losses.RetinanetCuboidLoss(params.retinanet_loss)
+      self._predict_cuboids = True
 
     self._box_loss_weight = params.retinanet_loss.box_loss_weight
+    self._cuboid_loss_weight = params.retinanet_loss.cuboid_loss_weight
 
     # Predict function.
     self._generate_detections_fn = postprocess_ops.MultilevelDetectionGenerator(
@@ -111,7 +113,7 @@ class RetinanetModel(base_model.Model):
             outputs['cuboid_outputs', labels['cuboid_targets'],
             labels['num_positives'])
         for cuboid_prop, loss_value in cuboid_losses.items():
-            model_loss = model_loss + loss_value
+            model_loss = model_loss + self._cuboid_loss_weight * loss_value
             self.add_scalar_summary(cuboid_prop + '_loss', loss_value)
 
     total_loss, train_op = self.optimize(model_loss)
@@ -144,6 +146,7 @@ class RetinanetModel(base_model.Model):
         'pred_detection_boxes': outputs['detection_boxes'],
         'pred_detection_classes': outputs['detection_classes'],
         'pred_detection_scores': outputs['detection_scores'],
+        'pred_cuboids': outputs['cuboid_outputs'],
     }
 
     if 'groundtruths' in labels:
@@ -156,6 +159,10 @@ class RetinanetModel(base_model.Model):
       predictions['gt_classes'] = labels['groundtruths']['classes']
       predictions['gt_areas'] = labels['groundtruths']['areas']
       predictions['gt_is_crowds'] = labels['groundtruths']['is_crowds']
+      predictions['gt_cuboids'] = dict(
+          (gt_key, labels['groundtruths'][gt_key])
+          for gt_key in labels['groundtruths'].keys()
+          if gt_key.startswith('cuboid/'))
 
       # Computes model loss for logging.
       cls_loss = self._cls_loss_fn(
@@ -173,7 +180,19 @@ class RetinanetModel(base_model.Model):
           tf.reshape(cls_loss, [1]), [batch_size])
       predictions['loss_box_loss'] = tf.tile(
           tf.reshape(box_loss, [1]), [batch_size])
+    
+      # Optionally add cuboid losses
+      if self._cuboid_loss_fn is not None:
+        cuboid_losses = self._cuboid_loss_fn(
+            outputs['cuboid_outputs', labels['cuboid_targets'],
+            labels['num_positives'])
+        for cuboid_prop, loss_value in cuboid_losses.items():
+          model_loss = model_loss + self._cuboid_loss_weight * loss_value
+          predictions['loss_' + cuboid_prop] = tf.tile(
+            tf.reshape(loss_value, [1]), [batch_size])
+
       predictions['loss_model_loss'] = tf.tile(
           tf.reshape(model_loss, [1]), [batch_size])
+    
     return tf.estimator.tpu.TPUEstimatorSpec(
         mode=tf.estimator.ModeKeys.PREDICT, predictions=predictions)
