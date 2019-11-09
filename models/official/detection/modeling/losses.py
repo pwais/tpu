@@ -485,9 +485,9 @@ class RetinanetCuboidLoss(object):
       'cuboid_center':
         self.center_loss(cuboid_outputs, labels, num_positives_sum),
       'cuboid_depth': 
-        self.depth_loss(cuboid_outputs, labels, num_positives_sum),
-      'cuboid_yaw': 
-        self.yaw_loss(cuboid_outputs, labels, num_positives_sum),
+        1e-3 * self.depth_loss(cuboid_outputs, labels, num_positives_sum),
+      # 'cuboid_yaw': 
+      #    self.yaw_loss(cuboid_outputs, labels, num_positives_sum),
       'cuboid_size': 
          self.size_loss(cuboid_outputs, labels, num_positives_sum),
     }
@@ -527,7 +527,10 @@ class RetinanetCuboidLoss(object):
     yaw_losses = []
     for level in cuboid_outputs.keys():
       preds = cuboid_outputs[level]['cuboid_yaw']
+      preds = tf.identity(preds, name='preds_%s' % level)
+      # preds = tf.check_numerics(preds, 'preds')
       label_yaw = labels['cuboid/box/perspective_yaw'][level]
+      label_yaw = tf.identity(label_yaw, name='label_yaw_%s' % level)
       
       # Following both Hu et al. and Drago et al. (originators), we use
       # the multibin loss:
@@ -542,6 +545,7 @@ class RetinanetCuboidLoss(object):
       target_yaw = (label_yaw + 2*PI) % (2*PI)
       target_yaw = tf.expand_dims(target_yaw, -1)
       target_yaw = tf.tile(target_yaw, [1, 1, 1, 1, n_bins])
+      target_yaw = tf.identity(target_yaw, name='target_yaw_%s' % level)
 
       bin_size_rad = (2*PI) / n_bins
       theta_bin = tf.range(0, 2*PI, bin_size_rad)
@@ -557,43 +561,58 @@ class RetinanetCuboidLoss(object):
       pred_bin =    preds[:, :, :, :, 0:n_bins]
       pred_cos_th = preds[:, :, :, :, n_bins:2*n_bins]
       pred_sin_th = preds[:, :, :, :, 2*n_bins:]
-      normalizer = tf.sqrt(pred_cos_th ** 2 + pred_sin_th **2)
+      normalizer = tf.sqrt(pred_cos_th ** 2 + pred_sin_th **2) + 1e-9
       pred_cos_th /= normalizer
       pred_sin_th /= normalizer
 
-      # Less numerical stability, but our dimensionality is small
-      pred_bin_softmax = tf.nn.softmax(pred_bin)
-      bin_loss = -1 * target_bin * tf.log(pred_bin_softmax)
-      # bin_loss = tf.nn.softmax_cross_entropy_with_logits(
-      #             labels=target_bin, logits=pred_bin,
-      #             name='bin_loss_%s' % level)
+      # pred_cos_th = tf.check_numerics(pred_cos_th, 'pred_cos_th')
+      # target_residual_cos_th = tf.check_numerics(target_residual_cos_th, 'target_residual_cos_th')
+
+      # # Less numerical stability, but our dimensionality is small
+      # pred_bin_softmax = tf.nn.softmax(pred_bin)
+      # bin_loss = -1 * target_bin * tf.log(pred_bin_softmax)
+      bin_loss = tf.nn.softmax_cross_entropy_with_logits(
+                        labels=target_bin, logits=pred_bin,
+                        name='bin_loss_%s' % level)
 
       cos_resid_loss = tf.losses.huber_loss(
                           target_residual_cos_th,
                           pred_cos_th,
                           delta=0.01, # TODO tune to bin_size_rad ~~~~~~~~~~~~~~~~~~~~
                           reduction=tf.losses.Reduction.NONE)
+      cos_resid_loss = tf.identity(
+                          cos_resid_loss,
+                          name='cos_resid_loss_%s' % level)
       sin_resid_loss = tf.losses.huber_loss(
                           target_residual_sin_th,
                           pred_sin_th,
                           delta=0.01, # TODO tune to bin_size_rad ~~~~~~~~~~~~~~~~~~~~~~~
                           reduction=tf.losses.Reduction.NONE)
-      def filter_loss(l):
-        return tf.where(tf.equal(target_yaw, ignore_label),
-                           tf.zeros_like(target_yaw, dtype=tf.float32),
-                           l)
+      sin_resid_loss = tf.identity(
+                          sin_resid_loss,
+                          name='sin_resid_loss_%s' % level)
       
-      bin_loss = tf.check_numerics(filter_loss(bin_loss), 'moofbin')
-      cos_resid_loss = tf.check_numerics(filter_loss(cos_resid_loss), 'cos_resid_loss')
-      sin_resid_loss = tf.check_numerics(filter_loss(sin_resid_loss), 'sin_resid_loss')
-      yaw_loss = bin_loss + cos_resid_loss + sin_resid_loss
+      # # bin_loss = tf.check_numerics(filter_loss(bin_loss), 'moofbin')
+      # cos_resid_loss = tf.check_numerics(filter_loss(cos_resid_loss), 'cos_resid_loss')
+      # sin_resid_loss = tf.check_numerics(filter_loss(sin_resid_loss), 'sin_resid_loss')
 
+      yaw_loss = (
+        bin_loss + 
+        tf.reduce_mean(cos_resid_loss, axis=-1) + 
+        tf.reduce_mean(sin_resid_loss, axis=-1))
 
-      # yaw_loss = tf.where(tf.equal(target_yaw, ignore_label),
-      #                      tf.zeros_like(target_yaw, dtype=tf.float32),
+      yaw_loss = tf.where(tf.equal(label_yaw, ignore_label),
+                           tf.zeros_like(label_yaw, dtype=tf.float32),
+                           yaw_loss)
+      
+      # yaw_loss = tf.where(tf.equal(yaw_loss, float('nan')),
+      #                      tf.zeros_like(yaw_loss, dtype=tf.float32),
       #                      yaw_loss)
-      yaw_loss /= num_positives_sum
-      yaw_loss = tf.reduce_sum(yaw_loss)
+
+      # import pdb; pdb.set_trace()
+      # label_yaw = tf.check_numerics(label_yaw, 'label_yaw')
+      # yaw_loss = tf.check_numerics(yaw_loss, 'yaw_loss')
+      yaw_loss = 1e-6 * tf.reduce_sum(yaw_loss)
 
       # ignore_loss = tf.where(tf.equal(label_yaw, ignore_label),
       #                      tf.zeros_like(label_yaw, dtype=tf.float32),

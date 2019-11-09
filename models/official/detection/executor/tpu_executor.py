@@ -124,7 +124,12 @@ class TpuExecutor(object):
 
   def train(self, input_fn, steps):
     """Training the model with training data and labels in input_fn."""
+    from tensorflow.python import debug as tf_debug
+    hook = tf_debug.LocalCLIDebugHook(ui_type="readline")
+    hook.add_tensor_filter("has_inf_or_nan", tf_debug.has_inf_or_nan)
     self._estimator.train(input_fn=input_fn, max_steps=steps)
+    # self._estimator.train(input_fn=input_fn, max_steps=steps,
+    #         hooks = [hook])
 
   def prepare_evaluation(self):
     """Preapre for evaluation."""

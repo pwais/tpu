@@ -109,6 +109,17 @@ class RetinanetModel(base_model.Model):
 
     # Optionally add cuboid losses
     if self._cuboid_loss_fn is not None:
+        ignore_label=float('-inf')
+        for k, l_to_t in labels['cuboid_targets'].items():
+            for level, ttensor in l_to_t.items():
+                k_nice = k.replace('/', '_')
+                k_nice = 'num_non_empty/' + k_nice
+                num_non_inf = tf.reduce_sum(
+                    tf.where(tf.equal(ttensor, ignore_label),
+                           tf.zeros_like(ttensor, dtype=tf.float32),
+                           tf.ones_like(ttensor, dtype=tf.float32)))
+                self.add_scalar_summary(k_nice, num_non_inf)
+        
         cuboid_losses = self._cuboid_loss_fn(
             outputs['cuboid_outputs'], labels['cuboid_targets'],
             labels['num_positives'])
