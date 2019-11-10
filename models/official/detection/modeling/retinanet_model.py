@@ -34,6 +34,12 @@ class RetinanetModel(base_model.Model):
   def __init__(self, params):
     super(RetinanetModel, self).__init__(params)
 
+    # TODO: Support more complicated params checks in Params itself
+    assert (
+      params.retinanet_head.anchors_per_location == 
+      params.anchor.num_scales * len(params.anchor.aspect_ratios)), \
+        params.as_dict()
+
     # Architecture generators.
     self._backbone_fn = factory.backbone_generator(params)
     self._fpn_fn = factory.multilevel_features_generator(params)
@@ -117,9 +123,10 @@ class RetinanetModel(base_model.Model):
                 k_nice = 'num_non_empty/' + k_nice
                 num_non_inf = tf.reduce_sum(
                     tf.where(tf.equal(ttensor, ignore_label),
-                           tf.zeros_like(ttensor, dtype=tf.float32),
-                           tf.ones_like(ttensor, dtype=tf.float32)))
+                            tf.zeros_like(ttensor, dtype=tf.float32),
+                            tf.ones_like(ttensor, dtype=tf.float32)))
                 self.add_scalar_summary(k_nice, num_non_inf)
+            break # only do one key
         
         cuboid_losses = self._cuboid_loss_fn(
             outputs['cuboid_outputs'], labels['cuboid_targets'],
@@ -153,6 +160,7 @@ class RetinanetModel(base_model.Model):
         images, labels=labels, mode=mode_keys.PREDICT)
 
     predictions = {
+        'images': images,
         'pred_image_info': labels['image_info'],
         'pred_num_detections': outputs['num_detections'],
         'pred_detection_boxes': outputs['detection_boxes'],
@@ -164,6 +172,7 @@ class RetinanetModel(base_model.Model):
 
     if 'groundtruths' in labels:
       predictions['pred_source_id'] = labels['groundtruths']['source_id']
+      predictions['pred_filename'] = labels['groundtruths']['filename']
       predictions['gt_source_id'] = labels['groundtruths']['source_id']
       predictions['gt_image_info'] = labels['image_info']
       predictions['gt_num_detections'] = (

@@ -229,7 +229,7 @@ def _generate_detections_batched(boxes,
   with tf.name_scope('generate_detections'):
     # TODO(tsungyi): Removes normalization/denomalization once the
     # tf.image.combined_non_max_suppression is coordinate system agnostic.
-    # Normalizes maximum box cooridinates to 1.
+    # Normalizes maximum box coordinates to 1.
     normalizer = tf.reduce_max(boxes)
     boxes /= normalizer
     (nmsed_boxes, nmsed_scores, nmsed_classes,
@@ -241,7 +241,7 @@ def _generate_detections_batched(boxes,
          iou_threshold=nms_iou_threshold,
          score_threshold=score_threshold,
          pad_per_class=False,)
-    # De-normalizes box cooridinates.
+    # De-normalizes box coordinates.
     nmsed_boxes *= normalizer
   return nmsed_boxes, nmsed_scores, nmsed_classes, valid_detections
 
@@ -278,7 +278,6 @@ class MultilevelDetectionGenerator(object):
 
       # Box clipping.
       boxes_i = box_utils.clip_boxes(boxes_i, image_shape)
-
       boxes.append(boxes_i)
       scores.append(scores_i)
     boxes = tf.concat(boxes, axis=1)
