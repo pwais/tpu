@@ -473,9 +473,17 @@ class RetinanetHead(object):
               name='cuboid_%s_predict_%s' % (name, level))
       return head
     
+    def predict_depth(logits):
+      # Following Hu et al., we predict inverse depth.
+      # https://github.com/ucbdrive/3d-vehicle-tracking/blob/ce54b2461c8983aef265ed043dec976c6035d431/3d-tracking/utils/network_utils.py#L115
+      # (-inf, inf) -> [0, 1]
+      depth_activation = tf.math.sigmoid(logits)
+      # [0, 1] -> [0, inf)
+      return 1. / (depth_activation + 1e-6) - 1. / (1 + 1e-6)
+
     name_to_head = {
       'cuboid_center': create_head('center', 2),
-      'cuboid_depth': create_head('depth', 1, top_activation=tf.math.sigmoid),
+      'cuboid_depth': create_head('depth', 1, top_activation=predict_depth),
       'cuboid_yaw': create_head('yaw', 3 * self._cuboid_yaw_num_bins),
       'cuboid_size': create_head('size', 3),
     }

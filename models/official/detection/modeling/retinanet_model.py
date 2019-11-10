@@ -172,10 +172,10 @@ class RetinanetModel(base_model.Model):
       predictions['gt_classes'] = labels['groundtruths']['classes']
       predictions['gt_areas'] = labels['groundtruths']['areas']
       predictions['gt_is_crowds'] = labels['groundtruths']['is_crowds']
-      predictions['gt_cuboids'] = dict(
-          (gt_key, labels['groundtruths'][gt_key])
-          for gt_key in labels['groundtruths'].keys()
-          if gt_key.startswith('cuboid/'))
+    #   predictions['gt_cuboids'] = dict(
+    #       (gt_key, labels['groundtruths'][gt_key])
+    #       for gt_key in labels['groundtruths'].keys()
+    #       if gt_key.startswith('cuboid/'))
 
       # Computes model loss for logging.
       cls_loss = self._cls_loss_fn(

@@ -512,13 +512,8 @@ class RetinanetCuboidLoss(object):
       pred_depth = cuboid_outputs[level]['cuboid_depth']
       label_depth = tf.expand_dims(
         labels['cuboid/box/center_depth'][level], -1)
-
-      # Following Hu et al., we predict inverse depth.
-      # https://github.com/ucbdrive/3d-vehicle-tracking/blob/ce54b2461c8983aef265ed043dec976c6035d431/3d-tracking/utils/network_utils.py#L115
-      target_depth = 1. / label_depth - 1.
-
       depth_losses.append(
-        self._regression_loss(pred_depth, target_depth, num_positives_sum))
+        self._regression_loss(pred_depth, label_depth, num_positives_sum))
     # Sums per level losses to total loss.
     return tf.add_n(depth_losses)
 
@@ -552,7 +547,8 @@ class RetinanetCuboidLoss(object):
       cos_thb = tf.math.cos(theta_bin)
       sin_thb = tf.math.sin(theta_bin)
 
-      target_bin = tf.math.abs(target_yaw - theta_bin) / bin_size_rad
+      target_bin = 1. - tf.math.abs(target_yaw - theta_bin) / bin_size_rad
+      target_bin = tf.maximum(target_bin, tf.zeros_like(target_bin))
       target_residual_cos_th = tf.math.cos(target_yaw) - cos_thb
       target_residual_sin_th = tf.math.sin(target_yaw) - sin_thb
       
@@ -583,22 +579,20 @@ class RetinanetCuboidLoss(object):
                         labels=target_bin, logits=pred_bin,
                         name='bin_loss_%s' % level)
 
+      # Give the target bin residual more weight
+      resid_weights = target_bin + 1e-3
       cos_resid_loss = tf.losses.huber_loss(
                           target_residual_cos_th,
                           pred_cos_th,
+                          weights=resid_weights,
                           delta=0.01, # TODO tune to bin_size_rad ~~~~~~~~~~~~~~~~~~~~
                           reduction=tf.losses.Reduction.NONE)
-      cos_resid_loss = tf.identity(
-                          cos_resid_loss,
-                          name='cos_resid_loss_%s' % level)
       sin_resid_loss = tf.losses.huber_loss(
                           target_residual_sin_th,
                           pred_sin_th,
+                          weights=resid_weights,
                           delta=0.01, # TODO tune to bin_size_rad ~~~~~~~~~~~~~~~~~~~~~~~
                           reduction=tf.losses.Reduction.NONE)
-      sin_resid_loss = tf.identity(
-                          sin_resid_loss,
-                          name='sin_resid_loss_%s' % level)
       
       # # bin_loss = tf.check_numerics(filter_loss(bin_loss), 'moofbin')
       # cos_resid_loss = tf.check_numerics(filter_loss(cos_resid_loss), 'cos_resid_loss')
