@@ -471,7 +471,7 @@ class RetinanetHead(object):
               head,
               [b, h, w, self._anchors_per_location, num_outputs],
               name='cuboid_%s_predict_%s' % (name, level))
-      print(head)
+      tf.logging.info("Cuboid head: %s" % head)
       return head
     
     def predict_depth(logits):

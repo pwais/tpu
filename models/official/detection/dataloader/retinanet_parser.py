@@ -315,6 +315,7 @@ class Parser(object):
         'num_positives': num_positives,
         'image_info': image_info,
     }
+    import pdb; pdb.set_trace()
 
     if self._include_cuboids:
       labels['cuboid_targets'] = self.__get_cuboid_targets(
@@ -377,16 +378,18 @@ class Parser(object):
 
     # Sets up groundtruth data for evaluation.
     groundtruths = {
-        'source_id': data['source_id'],
-        'filename': data['filename'],
-        'height': data['height'],
-        'width': data['width'],
-        'num_groundtrtuhs': tf.shape(data['groundtruth_classes']),
-        'boxes': box_utils.denormalize_boxes(
-            data['groundtruth_boxes'], image_shape),
-        'classes': data['groundtruth_classes'],
-        'areas': data['groundtruth_area'],
-        'is_crowds': tf.cast(data['groundtruth_is_crowd'], tf.int32),
+      'source_id': data['source_id'],
+      'filename_utf8':
+          tf.strings.unicode_decode(data['filename'], 'UTF-8'),
+          # TPU does not support strings :(
+      'height': data['height'],
+      'width': data['width'],
+      'num_groundtrtuhs': tf.shape(data['groundtruth_classes']),
+      'boxes': box_utils.denormalize_boxes(
+          data['groundtruth_boxes'], image_shape),
+      'classes': data['groundtruth_classes'],
+      'areas': data['groundtruth_area'],
+      'is_crowds': tf.cast(data['groundtruth_is_crowd'], tf.int32),
     }
     groundtruths['source_id'] = dataloader_utils.process_source_id(
         groundtruths['source_id'])
@@ -451,15 +454,17 @@ class Parser(object):
       boxes = box_utils.denormalize_boxes(
           data['groundtruth_boxes'], image_shape)
       groundtruths = {
-          'source_id': data['source_id'],
-          'filename': data['filename'],
-          'height': data['height'],
-          'width': data['width'],
-          'num_detections': tf.shape(data['groundtruth_classes']),
-          'boxes': boxes,
-          'classes': data['groundtruth_classes'],
-          'areas': data['groundtruth_area'],
-          'is_crowds': tf.cast(data['groundtruth_is_crowd'], tf.int32),
+        'source_id': data['source_id'],
+        'filename_utf8': 
+          tf.strings.unicode_decode(data['filename'], 'UTF-8'),
+          # TPU does not support strings :(
+        'height': data['height'],
+        'width': data['width'],
+        'num_detections': tf.shape(data['groundtruth_classes']),
+        'boxes': boxes,
+        'classes': data['groundtruth_classes'],
+        'areas': data['groundtruth_area'],
+        'is_crowds': tf.cast(data['groundtruth_is_crowd'], tf.int32),
       }
       groundtruths['source_id'] = dataloader_utils.process_source_id(
           groundtruths['source_id'])

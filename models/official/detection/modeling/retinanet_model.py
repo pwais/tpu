@@ -173,7 +173,8 @@ class RetinanetModel(base_model.Model):
 
     if 'groundtruths' in labels:
       predictions['pred_source_id'] = labels['groundtruths']['source_id']
-      predictions['pred_filename'] = labels['groundtruths']['filename']
+      predictions['pred_filename'] = tf.strings.unicode_encode(
+        labels['groundtruths']['filename_utf8'], 'UTF-8')
       predictions['gt_source_id'] = labels['groundtruths']['source_id']
       predictions['gt_image_info'] = labels['image_info']
       predictions['gt_num_detections'] = (
@@ -182,10 +183,9 @@ class RetinanetModel(base_model.Model):
       predictions['gt_classes'] = labels['groundtruths']['classes']
       predictions['gt_areas'] = labels['groundtruths']['areas']
       predictions['gt_is_crowds'] = labels['groundtruths']['is_crowds']
-    #   predictions['gt_cuboids'] = dict(
-    #       (gt_key, labels['groundtruths'][gt_key])
-    #       for gt_key in labels['groundtruths'].keys()
-    #       if gt_key.startswith('cuboid/'))
+      for gt_key in labels['groundtruths']:
+        if gt_key.startswith('cuboid/'):
+          predictions['gt_' + gt_key] = labels['groundtruths'][gt_key]
 
       # Computes model loss for logging.
       cls_loss = self._cls_loss_fn(
