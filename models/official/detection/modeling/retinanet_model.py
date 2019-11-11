@@ -82,15 +82,16 @@ class RetinanetModel(base_model.Model):
         batch_size, is_training=(mode == mode_keys.TRAIN))
 
     if mode != mode_keys.TRAIN:
-      boxes, scores, classes, valid_detections = self._generate_detections_fn(
+      boxes, scores, classes, valid_detections, cuboids = (
+        self._generate_detections_fn(
           box_outputs, cls_outputs, labels['anchor_boxes'],
-          labels['image_info'][:, 1:2, :])
+          labels['image_info'][:, 1:2, :], cuboid_outputs=cuboid_outputs))
       model_outputs.update({
           'num_detections': valid_detections,
           'detection_boxes': boxes,
           'detection_classes': classes,
           'detection_scores': scores,
-          # TODO generate cuboids ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+          'detection_cuboids': cuboids,
       })
     return model_outputs
 
@@ -166,9 +167,9 @@ class RetinanetModel(base_model.Model):
         'pred_detection_boxes': outputs['detection_boxes'],
         'pred_detection_classes': outputs['detection_classes'],
         'pred_detection_scores': outputs['detection_scores'],
-        #'pred_cuboids': outputs['cuboid_outputs'],
-        # fixme
     }
+    for prop, detections in outputs['detection_cuboids'].items():
+      predictions['pred_' + prop] = detections
 
     if 'groundtruths' in labels:
       predictions['pred_source_id'] = labels['groundtruths']['source_id']

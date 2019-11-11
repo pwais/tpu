@@ -46,6 +46,7 @@ def generate_detections_factory(params):
 
 def _generate_detections(boxes,
                          scores,
+                         cuboids=None,
                          max_total_size=100,
                          nms_iou_threshold=0.3,
                          score_threshold=0.05,
@@ -62,6 +63,8 @@ def _generate_detections(boxes,
       stacks class probability on all feature levels. The N is the number of
       total anchors on all levels. The num_classes is the number of classes
       predicted by the model. Note that the class_outputs here is the raw score.
+    cuboids: a dict of cuboid property to tensor containing scores for
+      that cuboid property.
     max_total_size: a scalar representing maximum number of boxes retained over
       all classes.
     nms_iou_threshold: a float representing the threshold for deciding whether
@@ -87,29 +90,42 @@ def _generate_detections(boxes,
     nmsed_boxes = []
     nmsed_classes = []
     nmsed_scores = []
+    nmsed_cuboids = {}
     valid_detections = []
     for i in range(batch_size):
+      cuboids_i = {}
+      if cuboids:
+        cuboids_i.update(dict((k, preds[i]) for k, preds in cuboids.items()))
       (nmsed_boxes_i, nmsed_scores_i, nmsed_classes_i,
-       valid_detections_i) = _generate_detections_per_image(
-           boxes[i],
-           scores[i],
-           max_total_size,
-           nms_iou_threshold,
-           score_threshold,
-           pre_nms_num_boxes)
+       valid_detections_i, nmsed_cuboids_i) = _generate_detections_per_image(
+          boxes[i],
+          scores[i],
+          cuboids=cuboids_i,
+          max_total_size=max_total_size,
+          nms_iou_threshold=nms_iou_threshold,
+          score_threshold=score_threshold,
+          pre_nms_num_boxes=pre_nms_num_boxes)
       nmsed_boxes.append(nmsed_boxes_i)
       nmsed_scores.append(nmsed_scores_i)
       nmsed_classes.append(nmsed_classes_i)
+      for prop, prop_preds_i in nmsed_cuboids_i.items():
+        nmsed_cuboids.setdefault(prop, [])
+        nmsed_cuboids[prop].append(prop_preds_i)
       valid_detections.append(valid_detections_i)
   nmsed_boxes = tf.stack(nmsed_boxes, axis=0)
   nmsed_scores = tf.stack(nmsed_scores, axis=0)
   nmsed_classes = tf.stack(nmsed_classes, axis=0)
+  nmsed_cuboids = dict(
+    (prop, tf.stack(all_preds, axis=0))
+    for prop, all_preds in nmsed_cuboids.items())
   valid_detections = tf.stack(valid_detections, axis=0)
-  return nmsed_boxes, nmsed_scores, nmsed_classes, valid_detections
+  return (
+    nmsed_boxes, nmsed_scores, nmsed_classes, valid_detections, nmsed_cuboids)
 
 
 def _generate_detections_per_image(boxes,
                                    scores,
+                                   cuboids=None,
                                    max_total_size=100,
                                    nms_iou_threshold=0.3,
                                    score_threshold=0.05,
@@ -124,6 +140,8 @@ def _generate_detections_per_image(boxes,
       on all feature levels. The N is the number of total anchors on all levels.
       The num_classes is the number of classes predicted by the model. Note that
       the class_outputs here is the raw score.
+    cuboids: a dict of cuboid property to tensor containing scores for
+      that cuboid property.
     max_total_size: a scalar representing maximum number of boxes retained over
       all classes.
     nms_iou_threshold: a float representing the threshold for deciding whether
@@ -146,6 +164,7 @@ def _generate_detections_per_image(boxes,
   nmsed_boxes = []
   nmsed_scores = []
   nmsed_classes = []
+  nmsed_cuboids = {}
   num_classes_for_box = boxes.get_shape().as_list()[1]
   num_classes = scores.get_shape().as_list()[1]
   for i in range(num_classes):
@@ -156,6 +175,14 @@ def _generate_detections_per_image(boxes,
     scores_i, indices = tf.nn.top_k(
         scores_i, k=tf.minimum(tf.shape(scores_i)[-1], pre_nms_num_boxes))
     boxes_i = tf.gather(boxes_i, indices)
+
+    cuboid_preds_i = {}
+    if cuboids:
+      # Although cuboid estimates are class-agnostic, so are boxes; so we'll
+      # combine them using the same procedure applied to boxes.
+      assert num_classes_for_box == 1, "No per-class cuboid support"
+      for prop, preds in cuboids.items():
+        cuboid_preds_i[prop] = tf.gather(preds, indices)
 
     (nmsed_indices_i,
      nmsed_num_valid_i) = tf.image.non_max_suppression_padded(
@@ -176,25 +203,47 @@ def _generate_detections_per_image(boxes,
     nmsed_boxes.append(nmsed_boxes_i)
     nmsed_scores.append(nmsed_scores_i)
     nmsed_classes.append(nmsed_classes_i)
+    
+    if cuboid_preds_i:
+      for prop, preds_i in cuboid_preds_i.items():
+        nmsed_preds_i = tf.gather(preds_i, nmsed_indices_i)
+        # Sets scores of invalid boxes to -inf.
+        nmsed_preds_i = tf.where(
+                    tf.less(tf.range(max_total_size), [nmsed_num_valid_i]),
+                    nmsed_preds_i,
+                    float('-inf') * tf.ones_like(nmsed_preds_i))
 
-  # Concats results from all classes and sort them.
+        nmsed_cuboids.setdefault(prop, [])
+        nmsed_cuboids[prop].append(nmsed_preds_i)
+
+  # Concats results from all classes
   nmsed_boxes = tf.concat(nmsed_boxes, axis=0)
   nmsed_scores = tf.concat(nmsed_scores, axis=0)
   nmsed_classes = tf.concat(nmsed_classes, axis=0)
+  nmsed_cuboids = dict(
+                    (prop, tf.concat(nmsed_preds, axis=0))
+                    for prop, nmsed_preds in nmsed_cuboids.items())
+
+  # Sort results and take top k overall
   nmsed_scores, indices = tf.nn.top_k(
       nmsed_scores, k=max_total_size, sorted=True)
   nmsed_boxes = tf.gather(nmsed_boxes, indices)
   nmsed_classes = tf.gather(nmsed_classes, indices)
+  nmsed_cuboids = dict(
+                    (prop, tf.gather(preds, indices))
+                    for prop, preds in nmsed_cuboids.items())
   valid_detections = tf.reduce_sum(
       tf.cast(tf.greater(nmsed_scores, -1), tf.int32))
-  return nmsed_boxes, nmsed_scores, nmsed_classes, valid_detections
+  return (
+    nmsed_boxes, nmsed_scores, nmsed_classes, valid_detections, nmsed_cuboids)
 
 
 def _generate_detections_batched(boxes,
                                  scores,
                                  max_total_size,
                                  nms_iou_threshold,
-                                 score_threshold):
+                                 score_threshold,
+                                 cuboids=None):
   """Generates detected boxes with scores and classes for one-stage detector.
 
   The function takes output of multi-level ConvNets and anchor boxes and
@@ -215,6 +264,7 @@ def _generate_detections_batched(boxes,
       boxes overlap too much with respect to IOU.
     score_threshold: a float representing the threshold for deciding when to
       remove boxes based on score.
+    cuboids: (ignored for now)
   Returns:
     nms_boxes: `float` Tensor of shape [batch_size, max_total_size, 4]
       representing top detected boxes in [y1, x1, y2, x2].
@@ -243,7 +293,7 @@ def _generate_detections_batched(boxes,
          pad_per_class=False,)
     # De-normalizes box coordinates.
     nmsed_boxes *= normalizer
-  return nmsed_boxes, nmsed_scores, nmsed_classes, valid_detections
+  return nmsed_boxes, nmsed_scores, nmsed_classes, valid_detections, None
 
 
 class MultilevelDetectionGenerator(object):
@@ -254,10 +304,16 @@ class MultilevelDetectionGenerator(object):
     self._min_level = params.min_level
     self._max_level = params.max_level
 
-  def __call__(self, box_outputs, class_outputs, anchor_boxes, image_shape):
+  def __call__(self,
+               box_outputs,
+               class_outputs,
+               anchor_boxes,
+               image_shape,
+               cuboid_outputs=None):
     # Collects outputs from all levels into a list.
     boxes = []
     scores = []
+    cuboids = {}
     for i in range(self._min_level, self._max_level + 1):
       box_outputs_i_shape = tf.shape(box_outputs[i])
       batch_size = box_outputs_i_shape[0]
@@ -280,15 +336,36 @@ class MultilevelDetectionGenerator(object):
       boxes_i = box_utils.clip_boxes(boxes_i, image_shape)
       boxes.append(boxes_i)
       scores.append(scores_i)
+
+      # Pack cuboids
+      if cuboid_outputs:
+        level_outputs = cuboid_outputs[i]
+        for prop, preds in level_outputs.items():
+          # Stack all predictions to match layout of boxes and scores
+          preds_per_box = tf.shape(preds)[-1]
+          preds_i = tf.reshape(preds, [batch_size, -1, preds_per_box])
+          cuboids.setdefault(prop, [])
+          cuboids[prop].append(preds_i)
+
     boxes = tf.concat(boxes, axis=1)
     scores = tf.concat(scores, axis=1)
+    if cuboids:
+      cuboids = dict(
+                  (prop, tf.concat(preds, axis=1))
+                  for prop, preds in cuboids.items())
 
-    nmsed_boxes, nmsed_scores, nmsed_classes, valid_detections = (
-        self._generate_detections(tf.expand_dims(boxes, axis=2), scores))
+    result = self._generate_detections(
+                tf.expand_dims(boxes, axis=2),
+                  # Callee expects perhaps one box per class
+                scores,
+                cuboids=cuboids)
+    (nmsed_boxes, nmsed_scores, nmsed_classes,
+      valid_detections, nmsed_cuboids) = result
 
     # Adds 1 to offset the background class which has index 0.
     nmsed_classes += 1
-    return nmsed_boxes, nmsed_scores, nmsed_classes, valid_detections
+    return (
+      nmsed_boxes, nmsed_scores, nmsed_classes, valid_detections, nmsed_cuboids)
 
 
 class GenericDetectionGenerator(object):
