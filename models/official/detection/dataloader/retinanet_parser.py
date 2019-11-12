@@ -315,7 +315,7 @@ class Parser(object):
         'num_positives': num_positives,
         'image_info': image_info,
     }
-    import pdb; pdb.set_trace()
+    # import pdb; pdb.set_trace()
 
     if self._include_cuboids:
       labels['cuboid_targets'] = self.__get_cuboid_targets(
@@ -379,8 +379,7 @@ class Parser(object):
     # Sets up groundtruth data for evaluation.
     groundtruths = {
       'source_id': data['source_id'],
-      'filename_utf8':
-          tf.strings.unicode_decode(data['filename'], 'UTF-8'),
+      'filename_utf8s': data['filename_utf8s'],
           # TPU does not support strings :(
       'height': data['height'],
       'width': data['width'],
@@ -455,8 +454,7 @@ class Parser(object):
           data['groundtruth_boxes'], image_shape)
       groundtruths = {
         'source_id': data['source_id'],
-        'filename_utf8': 
-          tf.strings.unicode_decode(data['filename'], 'UTF-8'),
+        'filename_utf8s': data['filename_utf8s'],
           # TPU does not support strings :(
         'height': data['height'],
         'width': data['width'],

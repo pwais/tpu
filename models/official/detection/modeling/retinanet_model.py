@@ -173,8 +173,8 @@ class RetinanetModel(base_model.Model):
 
     if 'groundtruths' in labels:
       predictions['pred_source_id'] = labels['groundtruths']['source_id']
-      predictions['pred_filename'] = tf.strings.unicode_encode(
-        labels['groundtruths']['filename_utf8'], 'UTF-8')
+      predictions['pred_filename_utf8s'] = (
+        labels['groundtruths']['filename_utf8s'])
       predictions['gt_source_id'] = labels['groundtruths']['source_id']
       predictions['gt_image_info'] = labels['image_info']
       predictions['gt_num_detections'] = (
