@@ -457,6 +457,7 @@ class RetinanetCuboidLoss(object):
   """RetinaNet cuboid loss."""
 
   def __init__(self, params):
+    self._cuboid_yaw_use_ego = params.cuboid_yaw_use_ego
     self._cuboid_yaw_num_bins = params.cuboid_yaw_num_bins
     self._cuboid_yaw_loss_weight = params.cuboid_yaw_loss_weight
     self._cuboid_huber_loss_delta = params.cuboid_huber_loss_delta
@@ -525,7 +526,10 @@ class RetinanetCuboidLoss(object):
       preds = cuboid_outputs[level]['cuboid_yaw']
 
       # preds = tf.check_numerics(preds, 'preds')
-      label_yaw = labels['cuboid/box/perspective_yaw'][level]
+      if self._cuboid_yaw_use_ego:
+        label_yaw = labels['cuboid/cam/yaw'][level]
+      else:
+        label_yaw = labels['cuboid/box/perspective_yaw'][level]
 
       # Following both Hu et al. and Drago et al. (originators), we use
       # the multibin loss:

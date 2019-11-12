@@ -199,6 +199,7 @@ class Parser(object):
       'cuboid/box/center_depth',
       # Orientation
       'cuboid/box/perspective_yaw',
+      'cuboid/cam/yaw',
       # Size
       'cuboid/length', 'cuboid/width', 'cuboid/height',
     )
