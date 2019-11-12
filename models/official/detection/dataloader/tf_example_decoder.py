@@ -163,6 +163,7 @@ class TfExampleDecoder(object):
           lambda: _get_source_id_from_encoded_image(parsed_tensors))
     filename = parsed_tensors['image/filename']
     filename_utf8s = parsed_tensors['image/filename_utf8s']
+    # filename_utf8s.set_shape([10000])
     if self._include_mask:
       masks = self._decode_masks(parsed_tensors)
 
@@ -204,4 +205,5 @@ class TfExampleDecoder(object):
         PREFIX = 'image/object/'
         tensor_key = key[len(PREFIX):]
         decoded_tensors[tensor_key] = parsed_tensors[key]
+
     return decoded_tensors

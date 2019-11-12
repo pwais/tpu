@@ -172,10 +172,10 @@ class RetinanetModel(base_model.Model):
       predictions['pred_' + prop] = detections
 
     if 'groundtruths' in labels:
-      predictions['pred_source_id'] = labels['groundtruths']['source_id']
+      # predictions['pred_source_id'] = labels['groundtruths']['source_id']
       predictions['pred_filename_utf8s'] = (
         labels['groundtruths']['filename_utf8s'])
-      predictions['gt_source_id'] = labels['groundtruths']['source_id']
+      # predictions['gt_source_id'] = labels['groundtruths']['source_id']
       predictions['gt_image_info'] = labels['image_info']
       predictions['gt_num_detections'] = (
           labels['groundtruths']['num_detections'])

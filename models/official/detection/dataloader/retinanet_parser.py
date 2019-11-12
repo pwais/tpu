@@ -378,7 +378,7 @@ class Parser(object):
 
     # Sets up groundtruth data for evaluation.
     groundtruths = {
-      'source_id': data['source_id'],
+      # 'source_id': data['source_id'],
       'filename_utf8s': data['filename_utf8s'],
           # TPU does not support strings :(
       'height': data['height'],
@@ -390,8 +390,8 @@ class Parser(object):
       'areas': data['groundtruth_area'],
       'is_crowds': tf.cast(data['groundtruth_is_crowd'], tf.int32),
     }
-    groundtruths['source_id'] = dataloader_utils.process_source_id(
-        groundtruths['source_id'])
+    # groundtruths['source_id'] = dataloader_utils.process_source_id(
+    #     groundtruths['source_id'])
     self.__maybe_add_cuboid_gts(groundtruths, data)    
     groundtruths = dataloader_utils.pad_groundtruths_to_fixed_size(
         groundtruths, self._max_num_instances)
@@ -453,7 +453,7 @@ class Parser(object):
       boxes = box_utils.denormalize_boxes(
           data['groundtruth_boxes'], image_shape)
       groundtruths = {
-        'source_id': data['source_id'],
+        # 'source_id': data['source_id'],
         'filename_utf8s': data['filename_utf8s'],
           # TPU does not support strings :(
         'height': data['height'],
@@ -464,8 +464,8 @@ class Parser(object):
         'areas': data['groundtruth_area'],
         'is_crowds': tf.cast(data['groundtruth_is_crowd'], tf.int32),
       }
-      groundtruths['source_id'] = dataloader_utils.process_source_id(
-          groundtruths['source_id'])
+      # groundtruths['source_id'] = dataloader_utils.process_source_id(
+      #     groundtruths['source_id'])
       self.__maybe_add_cuboid_gts(groundtruths, data)
       groundtruths = dataloader_utils.pad_groundtruths_to_fixed_size(
           groundtruths, self._max_num_instances)
@@ -497,7 +497,7 @@ class Parser(object):
       if self._include_cuboids:
         labels['cuboid_targets'] = self.__get_cuboid_targets(
                                         data, anchor_labeler, boxes, indices)
-
+    # import pdb; pdb.set_trace()
     return {
         'images': image,
         'labels': labels,
