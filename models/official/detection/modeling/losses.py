@@ -460,6 +460,8 @@ class RetinanetCuboidLoss(object):
     self._cuboid_yaw_use_ego = params.cuboid_yaw_use_ego
     self._cuboid_yaw_num_bins = params.cuboid_yaw_num_bins
     self._cuboid_yaw_loss_weight = params.cuboid_yaw_loss_weight
+    self._cuboid_yaw_loss_residual_weight = (
+      params.cuboid_yaw_loss_residual_weight)
     self._cuboid_huber_loss_delta = params.cuboid_huber_loss_delta
 
   def __call__(self, cuboid_outputs, labels, num_positives):
@@ -604,8 +606,10 @@ class RetinanetCuboidLoss(object):
 
       yaw_loss = (
         bin_loss + 
-        tf.reduce_mean(cos_resid_loss, axis=-1) + 
-        tf.reduce_mean(sin_resid_loss, axis=-1))
+        self._cuboid_yaw_loss_residual_weight * 
+          tf.reduce_mean(cos_resid_loss, axis=-1) + 
+        self._cuboid_yaw_loss_residual_weight *
+          tf.reduce_mean(sin_resid_loss, axis=-1))
 
       yaw_loss = tf.where(tf.equal(label_yaw, ignore_label),
                            tf.zeros_like(label_yaw, dtype=tf.float32),
