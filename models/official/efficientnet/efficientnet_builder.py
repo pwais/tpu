@@ -133,9 +133,9 @@ def swish(features, use_native=True, use_hard=False):
   """Computes the Swish activation function.
 
   We provide three alternnatives:
-    - Native tf.nn.swish, use less memory during training than compsible swish.
+    - Native tf.nn.swish, use less memory during training than composable swish.
     - Quantization friendly hard swish.
-    - A composible swish, equavilant to tf.nn.swish, but more general for
+    - A composable swish, equivalant to tf.nn.swish, but more general for
       finetuning and TF-Hub.
 
   Args:
@@ -148,6 +148,9 @@ def swish(features, use_native=True, use_hard=False):
   Returns:
     The activation value.
   """
+  if use_native and use_hard:
+    raise ValueError('Cannot specify both use_native and use_hard.')
+
   if use_native:
     return tf.nn.swish(features)
 
@@ -184,7 +187,8 @@ def efficientnet(width_coefficient=None,
       # The default is TPU-specific batch norm.
       # The alternative is tf.layers.BatchNormalization.
       batch_norm=utils.TpuBatchNormalization,  # TPU-specific requirement.
-      use_se=True)
+      use_se=True,
+      clip_projection_output=False)
   decoder = BlockDecoder()
   return decoder.decode(blocks_args), global_params
 
@@ -246,7 +250,8 @@ def build_model(images,
     if not override_params:
       override_params = {}
     override_params['batch_norm'] = utils.BatchNormalization
-    override_params['relu_fn'] = functools.partial(swish, use_native=False)
+    if fine_tuning:
+      override_params['relu_fn'] = functools.partial(swish, use_native=False)
   blocks_args, global_params = get_model_params(model_name, override_params)
 
   if model_dir:
