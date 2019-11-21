@@ -360,59 +360,51 @@ class FastrcnnCuboidLoss(object):
     self._cuboid_yaw_loss_residual_weight = (
       params.cuboid_yaw_loss_residual_weight)
 
-  def __call__(self, cuboid_outputs, labels):
+  def __call__(self, cuboid_outputs, class_targets, labels):
     """Computes the cuboid loss for Fast-RCNN.
     
     Args:
       cuboid_outputs: a dict of ouput property to outputs, where each output
         is a float tensor representing the prediction for each box
         with a shape of [batch_size, num_boxes, prediction_size].
+      class_targets: a float tensor representing the class label for each box
+        with a shape of [batch_size, num_boxes].
       labels: the dictionary that returned from dataloader that includes
         cuboid groundturth targets.
+      select_class_targets: a tensor with a shape of [batch_size, num_targets],
+        representing the foreground mask targets.
 
     Returns:
       a dict of loss to scalar tensor representing cuboid regression losses.
     """
     with tf.name_scope('fast_rcnn_cuboid_loss'):
       cuboid_losses = {
-        'cuboid_center': self.center_loss(cuboid_outputs, labels),
-        'cuboid_depth': self.depth_loss(cuboid_outputs, labels),
-        'cuboid_yaw': self.yaw_loss(cuboid_outputs, labels),
-        'cuboid_size': self.size_loss(cuboid_outputs, labels),
+        'cuboid_center':
+          self.center_loss(cuboid_outputs, class_targets, labels),
+        'cuboid_depth':
+          self.depth_loss(cuboid_outputs, class_targets, labels),
+        'cuboid_yaw':
+          self.yaw_loss(cuboid_outputs, class_targets, labels),
+        'cuboid_size':
+          self.size_loss(cuboid_outputs, class_targets, labels),
       }
       return cuboid_losses
 
-
-  #     _, _, num_classes = class_outputs.get_shape().as_list()
-  #     class_targets = tf.to_int32(class_targets)
-  #     class_targets_one_hot = tf.one_hot(class_targets, num_classes)
-  #     return self._fast_rcnn_class_loss(class_outputs, class_targets_one_hot)
-
-  # def _fast_rcnn_class_loss(self, class_outputs, class_targets_one_hot,
-  #                           normalizer=1.0):
-  #   """Computes classification loss."""
-  #   with tf.name_scope('fast_rcnn_class_loss'):
-  #     # The loss is normalized by the sum of non-zero weights before additional
-  #     # normalizer provided by the function caller.
-  #     class_loss = tf.losses.softmax_cross_entropy(
-  #         class_targets_one_hot, class_outputs,
-  #         reduction=tf.losses.Reduction.SUM_BY_NONZERO_WEIGHTS)
-  #     class_loss /= normalizer
-  #     return class_loss
-
-  def center_loss(self, cuboid_outputs, labels):
+  def center_loss(self, cuboid_outputs, class_targets, labels):
     pred_xy = cuboid_outputs['cuboid_center']
     label_x = tf.expand_dims(labels['cuboid/box/center_x'], -1)
     label_y = tf.expand_dims(labels['cuboid/box/center_y'], -1)
     label_xy = tf.concat([label_x, label_y], axis=-1)
-    return self._regression_loss(pred_xy, label_xy)
+    mask = tf.tile(tf.expand_dims(tf.greater(class_targets, 0), axis=2),
+                     [1, 1, 2])
+    return self._regression_loss(pred_xy, label_xy, mask)
   
-  def depth_loss(self, cuboid_outputs, labels):
+  def depth_loss(self, cuboid_outputs, class_targets, labels):
     pred_depth = cuboid_outputs['cuboid_depth']
     label_depth = tf.expand_dims(labels['cuboid/box/center_depth'], -1)
     return self._regression_loss(pred_depth, label_depth)
 
-  def size_loss(self, cuboid_outputs, labels):
+  def size_loss(self, cuboid_outputs, class_targets, labels):
     pred_lwh = cuboid_outputs['cuboid_size']
     label_l = labels['cuboid/length']
     label_w = labels['cuboid/width']
@@ -422,9 +414,11 @@ class FastrcnnCuboidLoss(object):
                   tf.expand_dims(label_w, axis=-1),
                   tf.expand_dims(label_h, axis=-1)],
                   axis=-1)
-    return self._regression_loss(pred_lwh, label_lwh)
+    mask = tf.tile(tf.expand_dims(tf.greater(class_targets, 0), axis=2),
+                     [1, 1, 3])
+    return self._regression_loss(pred_lwh, label_lwh, mask)
 
-  def yaw_loss(self, cuboid_outputs, labels):
+  def yaw_loss(self, cuboid_outputs, class_targets, labels):
     n_bins = self._cuboid_yaw_num_bins
     preds = cuboid_outputs['cuboid_yaw']
 
@@ -459,13 +453,14 @@ class FastrcnnCuboidLoss(object):
     # Prediction bins and residuals
     yaw_head_n_vals = preds.get_shape().as_list()[-1]
     assert 3 * n_bins == yaw_head_n_vals
-      # # GUH https://github.com/tensorflow/tensorflow/issues/2540
-      # # Even if we mask the loss below, TF will backprop some NaN gradients
-      # # into the net weights unless we mask them here.
-      # mask = tf.expand_dims(label_yaw, -1)
-      # mask = tf.tile(mask, [1, 1, 1, 1, yaw_head_n_vals])
-      # preds = tf.where(
-      #           tf.equal(mask, ignore_label), tf.stop_gradient(preds), preds)
+    # GUH https://github.com/tensorflow/tensorflow/issues/2540
+    # Even if we mask the loss below, TF will backprop some NaN gradients
+    # into the net weights unless we mask them here.  So we need to mask
+    # off predictions for background
+    preds_mask = tf.tile(tf.expand_dims(tf.greater(class_targets, 0), axis=2),
+                     [1, 1, yaw_head_n_vals])
+    preds = tf.where(
+              tf.equal(preds_mask, 0), tf.stop_gradient(preds), preds)
 
     pred_bin =    preds[:, :, :, 0:n_bins]
     pred_cos_th = preds[:, :, :, n_bins:2*n_bins]
@@ -475,12 +470,15 @@ class FastrcnnCuboidLoss(object):
     pred_sin_th /= normalizer
 
     # Compute Loss!
+    mask = tf.tile(tf.expand_dims(tf.greater(class_targets, 0), axis=2),
+                     [1, 1, num_bins])
     bin_loss = tf.nn.softmax_cross_entropy_with_logits(
                         labels=target_bin, logits=pred_bin,
+                        weights=mask,
                         name='bin_loss_%s' % level)
 
     # Give the target bin residual more weight
-    resid_weights = target_bin + 1e-3
+    resid_weights = mask * (target_bin + 1e-3)
     cos_resid_loss = tf.losses.huber_loss(
                         target_residual_cos_th,
                         pred_cos_th,
@@ -504,7 +502,7 @@ class FastrcnnCuboidLoss(object):
     yaw_loss = tf.reduce_sum(yaw_loss)
     return self._cuboid_yaw_loss_weight * yaw_loss
 
-  def _regression_loss(self, r_outputs, r_targets):
+  def _regression_loss(self, r_outputs, r_targets, weights):
     """Computes a Fast RCNN regression loss."""
     r_dims = r_targets.get_shape().as_list()[-1]
 
@@ -513,6 +511,7 @@ class FastrcnnCuboidLoss(object):
         r_targets,
         r_outputs,
         delta=self._cuboid_huber_loss_delta,
+        weights=weights,
         reduction=tf.losses.Reduction.NONE)
     # r_loss /= normalizer TODO need this?
     return tf.reduce_sum(r_loss)

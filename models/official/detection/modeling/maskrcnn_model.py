@@ -66,6 +66,8 @@ class MaskrcnnModel(base_model.Model):
       self._mask_loss_fn = losses.MaskrcnnLoss()
     if self._include_cuboids:
       self._cuboid_loss_fn = losses.FastrcnnCuboidLoss(params.frcnn_cuboid_loss)
+    self._cuboid_total_loss_weight = (
+      params.architecture.cuboid_total_loss_weight)
 
     self._generate_detections_fn = postprocess_ops.GenericDetectionGenerator(
         params.postprocess)
@@ -129,14 +131,25 @@ class MaskrcnnModel(base_model.Model):
         'box_outputs': box_outputs,
     })
 
+    cuboid_outputs = {}
+    if self._include_cuboids:
+      cuboid_outputs = self._cuboid_head_fn(roi_features, is_training)
+      model_outputs.update({
+        'cuboid_outputs': cuboid_outputs,
+      })
+
     if not is_training:
-      boxes, scores, classes, valid_detections = self._generate_detections_fn(
-          box_outputs, class_outputs, rpn_rois, labels['image_info'][:, 1:2, :])
+      boxes, scores, classes, valid_detections, cuboids = (
+        self._generate_detections_fn(
+          box_outputs, class_outputs, rpn_rois,
+          labels['image_info'][:, 1:2, :], cuboid_outputs=cuboid_outputs))
+          # TODO even needed cuboid_outputs ? ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
       model_outputs.update({
           'num_detections': valid_detections,
           'detection_boxes': boxes,
           'detection_classes': classes,
           'detection_scores': scores,
+          'detection_cuboids': cuboids,
       })
 
     if not self._include_mask:
@@ -174,6 +187,37 @@ class MaskrcnnModel(base_model.Model):
 
     return model_outputs
 
+  def _build_losses(self, features, labels, outputs):
+    losses = {}
+
+    losses['rpn_score_loss'] = self._rpn_score_loss_fn(
+        outputs['rpn_score_outputs'], labels['rpn_score_targets'])
+    losses['rpn_box_loss'] = self._rpn_box_loss_fn(
+        outputs['rpn_box_outputs'], labels['rpn_box_targets'])
+
+    losses['frcnn_class_loss'] = self._frcnn_class_loss_fn(
+        outputs['class_outputs'], outputs['class_targets'])
+    losses['frcnn_box_loss'] = self._frcnn_box_loss_fn(
+        outputs['box_outputs'],
+        outputs['class_targets'],
+        outputs['box_targets'])
+
+    if self._include_cuboids:
+      cuboid_losses = self._cuboid_loss_fn(
+        outputs['cuboid_outputs'],
+        outputs['class_targets'], labels['cuboid_targets'])
+      for cuboid_prop, loss_value in cuboid_losses.items():
+        loss_value = self._cuboid_total_loss_weight * loss_value
+        losses[cuboid_prop + '_loss'] = loss_value
+
+    if self._include_mask:
+      losses['mask_loss'] = self._mask_loss_fn(
+          outputs['mask_outputs'],
+          outputs['mask_targets'],
+          outputs['sampled_class_targets'])
+
+    return losses
+
   def train(self, features, labels):
     # If the input image is transposed (from NHWC to HWCN), we need to revert it
     # back to the original shape before it's used in the computation.
@@ -181,36 +225,51 @@ class MaskrcnnModel(base_model.Model):
       features = tf.transpose(features, [3, 0, 1, 2])
 
     outputs = self.model_outputs(features, labels, mode=mode_keys.TRAIN)
+    losses = self._build_losses(features, labels, outputs)
 
-    rpn_score_loss = self._rpn_score_loss_fn(
-        outputs['rpn_score_outputs'], labels['rpn_score_targets'])
-    rpn_box_loss = self._rpn_box_loss_fn(
-        outputs['rpn_box_outputs'], labels['rpn_box_targets'])
+    # rpn_score_loss = self._rpn_score_loss_fn(
+    #     outputs['rpn_score_outputs'], labels['rpn_score_targets'])
+    # rpn_box_loss = self._rpn_box_loss_fn(
+    #     outputs['rpn_box_outputs'], labels['rpn_box_targets'])
 
-    frcnn_class_loss = self._frcnn_class_loss_fn(
-        outputs['class_outputs'], outputs['class_targets'])
-    frcnn_box_loss = self._frcnn_box_loss_fn(
-        outputs['box_outputs'],
-        outputs['class_targets'],
-        outputs['box_targets'])
+    # frcnn_class_loss = self._frcnn_class_loss_fn(
+    #     outputs['class_outputs'], outputs['class_targets'])
+    # frcnn_box_loss = self._frcnn_box_loss_fn(
+    #     outputs['box_outputs'],
+    #     outputs['class_targets'],
+    #     outputs['box_targets'])
 
-    if self._include_mask:
-      mask_loss = self._mask_loss_fn(
-          outputs['mask_outputs'],
-          outputs['mask_targets'],
-          outputs['sampled_class_targets'])
-    else:
-      mask_loss = 0.0
+    # cuboid_loss = 0.0
+    # if self._include_cuboids:
+    #   cuboid_losses = self._cuboid_loss_fn(
+    #     outputs['cuboid_outputs'],
+    #     outputs['class_targets'], labels['cuboid_targets'])
+    #   for cuboid_prop, loss_value in cuboid_losses.items():
+    #     cuboid_loss = cuboid_loss + self._cuboid_total_loss_weight * loss_value
+    #     self.add_scalar_summary(cuboid_prop + '_loss', loss_value)
 
-    model_loss = (rpn_score_loss + rpn_box_loss + frcnn_class_loss
-                  + frcnn_box_loss + mask_loss)
+    # if self._include_mask:
+    #   mask_loss = self._mask_loss_fn(
+    #       outputs['mask_outputs'],
+    #       outputs['mask_targets'],
+    #       outputs['sampled_class_targets'])
+    # else:
+    #   mask_loss = 0.0
 
-    self.add_scalar_summary('rpn_score_loss', rpn_score_loss)
-    self.add_scalar_summary('rpn_box_loss', rpn_box_loss)
-    self.add_scalar_summary('fast_rcnn_class_loss', frcnn_class_loss)
-    self.add_scalar_summary('fast_rcnn_box_loss', frcnn_box_loss)
-    if self._include_mask:
-      self.add_scalar_summary('mask_loss', mask_loss)
+    # model_loss = (rpn_score_loss + rpn_box_loss + frcnn_class_loss
+    #               + frcnn_box_loss + mask_loss + cuboid_loss)
+
+    model_loss = 0.0
+    for loss_name, loss_value in losses.items():
+      self.add_scalar_summary(loss_name, loss_value)
+      model_loss = model_loss + loss_value
+
+    # self.add_scalar_summary('rpn_score_loss', rpn_score_loss)
+    # self.add_scalar_summary('rpn_box_loss', rpn_box_loss)
+    # self.add_scalar_summary('fast_rcnn_class_loss', frcnn_class_loss)
+    # self.add_scalar_summary('fast_rcnn_box_loss', frcnn_box_loss)
+    # if self._include_mask:
+    #   self.add_scalar_summary('mask_loss', mask_loss)
     self.add_scalar_summary('model_loss', model_loss)
 
     total_loss, train_op = self.optimize(model_loss)
@@ -244,6 +303,8 @@ class MaskrcnnModel(base_model.Model):
         'pred_detection_classes': outputs['detection_classes'],
         'pred_detection_scores': outputs['detection_scores'],
     }
+    for prop, detections in outputs['detection_cuboids'].items():
+      predictions['pred_' + prop] = detections
     if self._include_mask:
       predictions.update({
           'pred_detection_masks': outputs['detection_masks'],
@@ -252,6 +313,8 @@ class MaskrcnnModel(base_model.Model):
     if 'groundtruths' in labels:
       predictions['pred_source_id'] = labels['groundtruths']['source_id']
       predictions['gt_source_id'] = labels['groundtruths']['source_id']
+      predictions['pred_filename_utf8s'] = (
+          labels['groundtruths']['filename_utf8s'])
       predictions['gt_image_info'] = labels['image_info']
       predictions['gt_num_detections'] = (
           labels['groundtruths']['num_detections'])
@@ -259,6 +322,22 @@ class MaskrcnnModel(base_model.Model):
       predictions['gt_classes'] = labels['groundtruths']['classes']
       predictions['gt_areas'] = labels['groundtruths']['areas']
       predictions['gt_is_crowds'] = labels['groundtruths']['is_crowds']
+
+      # Log model losses
+      losses = self._build_losses(features, labels, outputs)
+
+      model_loss = 0.0
+      for loss_name, loss_value in losses.items():
+        model_loss = model_loss + loss_value
+
+        # Tiles the loss from [1] to [batch_size] since Estimator requires all
+        # predictions have the same batch dimension.
+        batch_size = tf.shape(images)[0]
+        predictions['loss_' + loss_name] = tf.tile(
+          tf.reshape(loss_value, [1]), [batch_size])
+
+      predictions['loss_model_loss'] = tf.tile(
+          tf.reshape(model_loss, [1]), [batch_size])
 
     return tf.estimator.tpu.TPUEstimatorSpec(
         mode=tf.estimator.ModeKeys.PREDICT, predictions=predictions)

@@ -21,11 +21,24 @@ from hyperparameters import params_dict
 
 TODO
 """
+architecture:
+  cuboid_total_loss_weight: 0.1
+
 maskrcnn_parser:
   include_cuboids: True
   aug_rand_hflip: False
   aug_scale_min: 1.0
   aug_scale_max: 1.0
+
+frcnn_cuboid_loss
+  huber_loss_delta: 0.1
+  cuboid_yaw_use_ego: False
+  cuboid_yaw_num_bins: 8
+  cuboid_yaw_loss_weight: 0.1
+  cuboid_yaw_loss_residual_weight: 0.1
+
+postprocess:
+  max_total_size: 200
 
 !! scales from retinanet, maybe more boxes
 """
@@ -45,6 +58,7 @@ MASKRCNN_CFG.override({
         'use_bfloat16': True,
         'include_mask': True,
         'include_cuboids': False,
+        'cuboid_total_loss_weight': 0.1,
     },
     'maskrcnn_parser': {
         'use_bfloat16': True,
@@ -134,6 +148,10 @@ MASKRCNN_CFG.override({
     },
     'frcnn_cuboid_loss': {
         'huber_loss_delta': 0.1,
+        'cuboid_yaw_use_ego': False,
+        'cuboid_yaw_num_bins': 8,
+        'cuboid_yaw_loss_weight': 0.1,
+        'cuboid_yaw_loss_residual_weight': 0.1,
     },
     'roi_proposal': {
         'rpn_pre_nms_top_k': 2000,

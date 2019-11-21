@@ -112,7 +112,7 @@ def assign_and_sample_proposals(proposed_boxes,
                                 fg_iou_thresh=0.5,
                                 bg_iou_thresh_hi=0.5,
                                 bg_iou_thresh_lo=0.0):
-  """Assigns the proposals with groundtruth classes and performs subsmpling.
+  """Assigns the proposals with groundtruth classes and performs subsampling.
 
   Given `proposed_boxes`, `gt_boxes`, and `gt_classes`, the function uses the
   following algorithm to generate the final `num_samples_per_image` RoIs.
@@ -254,7 +254,7 @@ def sample_and_crop_foreground_masks(candidate_rois,
       K = num_mask_samples_per_image.
     foreground_classes: a tensor of shape of [batch_size, K] storing the classes
       corresponding to the sampled foreground masks.
-    cropoped_foreground_masks: a tensor of shape of
+    cropped_foreground_masks: a tensor of shape of
       [batch_size, K, mask_target_size, mask_target_size] storing the cropped
       foreground masks used for training.
   """

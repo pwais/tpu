@@ -84,6 +84,9 @@ def _generate_detections(boxes,
       classes for detected boxes.
     valid_detections: `int` Tensor of shape [batch_size] only the top
       `valid_detections` boxes are valid detections.
+    nms_cuboids: (optional) dict of key -> `float` Tensor of shape
+      [batch_size, max_total_size, ?] representing predictions of 
+      detected cuboids.
   """
   with tf.name_scope('generate_detections'):
     batch_size = scores.get_shape().as_list()[0]
@@ -160,6 +163,8 @@ def _generate_detections_per_image(boxes,
       detected boxes.
     valid_detections: `int` Tensor of shape [1] only the top `valid_detections`
       boxes are valid detections.
+    nmsed_cuboids: (optional) dict of key -> `float` Tensor of shape
+      [max_total_size, ?] representing predictions of top detected cuboids.
   """
   nmsed_boxes = []
   nmsed_scores = []
@@ -275,6 +280,7 @@ def _generate_detections_batched(boxes,
       classes for detected boxes.
     valid_detections: `int` Tensor of shape [batch_size] only the top
       `valid_detections` boxes are valid detections.
+    nms_cuboids: None (ignored)
   """
   with tf.name_scope('generate_detections'):
     # TODO(tsungyi): Removes normalization/denomalization once the
@@ -374,7 +380,12 @@ class GenericDetectionGenerator(object):
   def __init__(self, params):
     self._generate_detections = generate_detections_factory(params)
 
-  def __call__(self, box_outputs, class_outputs, anchor_boxes, image_shape):
+  def __call__(self,
+               box_outputs,
+               class_outputs,
+               anchor_boxes,
+               image_shape,
+               cuboid_outputs=None):
     """Generate final detections.
 
     Args:
@@ -387,6 +398,8 @@ class GenericDetectionGenerator(object):
       image_shape: a tensor of shape of [batch_size, 2] storing the image height
         and width w.r.t. the scaled image, i.e. the same image space as
         `box_outputs` and `anchor_boxes`.
+      cuboid_outputs: (optional) dict of key -> tensor of cuboid outputs,
+        with each tensor of shape [batch_size, K, num_outputs]
 
     Returns:
       nms_boxes: `float` Tensor of shape [batch_size, max_total_size, 4]
@@ -398,6 +411,9 @@ class GenericDetectionGenerator(object):
         representing classes for detected boxes.
       valid_detections: `int` Tensor of shape [batch_size] only the top
         `valid_detections` boxes are valid detections.
+      nmsed_cuboids: (optional) dict of key -> `float` Tensor of shape
+        [batch_size, max_total_size, ?] representing predictions of
+        top detected cuboids.
     """
     class_outputs = tf.nn.softmax(class_outputs, axis=-1)
 
@@ -434,10 +450,14 @@ class GenericDetectionGenerator(object):
         decoded_boxes,
         tf.stack([batch_size, num_locations, num_classes - 1, 4], axis=-1))
 
-    nmsed_boxes, nmsed_scores, nmsed_classes, valid_detections = (
-        self._generate_detections(decoded_boxes, class_outputs))
+    #cuboid_outputs needs tf.slice ???
+    res = self._generate_detections(
+                  decoded_boxes, class_outputs, cuboids=cuboid_outputs)
+    (nmsed_boxes, nmsed_scores, nmsed_classes,
+      valid_detections, nmsed_cuboids) = res
 
     # Adds 1 to offset the background class which has index 0.
     nmsed_classes += 1
 
-    return nmsed_boxes, nmsed_scores, nmsed_classes, valid_detections
+    return (nmsed_boxes, nmsed_scores, nmsed_classes,
+      valid_detections, nmsed_cuboids)
