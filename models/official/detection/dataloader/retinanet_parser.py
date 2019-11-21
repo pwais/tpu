@@ -180,7 +180,7 @@ class Parser(object):
             represents a group of instances by value {0, 1}. The tennsor is
             padded with 0 to the fixed dimension [self._max_num_instances].
           
-          (Optional: cuboid/-prefixed attributes 
+          (Optional: cuboid/-prefixed attributes) 
     """
     with tf.name_scope('parser'):
       data = self._example_decoder.decode(value)
@@ -316,7 +316,6 @@ class Parser(object):
         'num_positives': num_positives,
         'image_info': image_info,
     }
-    # import pdb; pdb.set_trace()
 
     if self._include_cuboids:
       labels['cuboid_targets'] = self.__get_cuboid_targets(
@@ -379,7 +378,7 @@ class Parser(object):
 
     # Sets up groundtruth data for evaluation.
     groundtruths = {
-      # 'source_id': data['source_id'],
+      'source_id': data['source_id'],
       'filename_utf8s': data['filename_utf8s'],
           # TPU does not support strings :(
       'height': data['height'],
@@ -391,8 +390,8 @@ class Parser(object):
       'areas': data['groundtruth_area'],
       'is_crowds': tf.cast(data['groundtruth_is_crowd'], tf.int32),
     }
-    # groundtruths['source_id'] = dataloader_utils.process_source_id(
-    #     groundtruths['source_id'])
+    groundtruths['source_id'] = dataloader_utils.process_source_id(
+        groundtruths['source_id'])
     self.__maybe_add_cuboid_gts(groundtruths, data)    
     groundtruths = dataloader_utils.pad_groundtruths_to_fixed_size(
         groundtruths, self._max_num_instances)
@@ -446,6 +445,8 @@ class Parser(object):
     labels = {
         'anchor_boxes': input_anchor.multilevel_boxes,
         'image_info': image_info,
+        'filename_utf8s': data['filename_utf8s'],
+          # TPU does not support strings :(
     }
     # If mode is PREDICT_WITH_GT, returns groundtruths and training targets
     # in labels.
@@ -454,7 +455,7 @@ class Parser(object):
       boxes = box_utils.denormalize_boxes(
           data['groundtruth_boxes'], image_shape)
       groundtruths = {
-        # 'source_id': data['source_id'],
+        'source_id': data['source_id'],
         'filename_utf8s': data['filename_utf8s'],
           # TPU does not support strings :(
         'height': data['height'],
@@ -465,8 +466,8 @@ class Parser(object):
         'areas': data['groundtruth_area'],
         'is_crowds': tf.cast(data['groundtruth_is_crowd'], tf.int32),
       }
-      # groundtruths['source_id'] = dataloader_utils.process_source_id(
-      #     groundtruths['source_id'])
+      groundtruths['source_id'] = dataloader_utils.process_source_id(
+          groundtruths['source_id'])
       self.__maybe_add_cuboid_gts(groundtruths, data)
       groundtruths = dataloader_utils.pad_groundtruths_to_fixed_size(
           groundtruths, self._max_num_instances)
@@ -498,7 +499,6 @@ class Parser(object):
       if self._include_cuboids:
         labels['cuboid_targets'] = self.__get_cuboid_targets(
                                         data, anchor_labeler, boxes, indices)
-    # import pdb; pdb.set_trace()
     return {
         'images': image,
         'labels': labels,

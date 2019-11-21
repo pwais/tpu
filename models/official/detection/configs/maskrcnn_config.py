@@ -19,6 +19,18 @@ import sys
 sys.path.insert(0, 'tpu/models')
 from hyperparameters import params_dict
 
+TODO
+"""
+maskrcnn_parser:
+  include_cuboids: True
+  aug_rand_hflip: False
+  aug_scale_min: 1.0
+  aug_scale_max: 1.0
+
+!! scales from retinanet, maybe more boxes
+"""
+
+
 # pylint: disable=line-too-long
 MASKRCNN_CFG = params_dict.ParamsDict(base_config.BASE_CFG)
 MASKRCNN_CFG.override({
@@ -47,6 +59,7 @@ MASKRCNN_CFG.override({
         'skip_crowd_during_training': True,
         'max_num_instances': 100,
         'include_mask': True,
+        'include_cuboids': False,
         'mask_crop_size': 112,
     },
     'anchor': {
