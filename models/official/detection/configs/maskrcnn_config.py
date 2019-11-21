@@ -32,6 +32,7 @@ MASKRCNN_CFG.override({
         'multilevel_features': 'fpn',
         'use_bfloat16': True,
         'include_mask': True,
+        'include_cuboids': False,
     },
     'maskrcnn_parser': {
         'use_bfloat16': True,
@@ -98,6 +99,17 @@ MASKRCNN_CFG.override({
             'use_sync_bn': False,
         },
     },
+    'frcnn_cuboid_head': {
+        'cuboid_yaw_num_bins': 8,
+        'fast_rcnn_mlp_head_dim': 1024,
+        'use_batch_norm': False,
+        'batch_norm': {
+            'batch_norm_momentum': 0.997,
+            'batch_norm_epsilon': 1e-4,
+            'batch_norm_trainable': True,
+            'use_sync_bn': False,
+        },
+    },
     'rpn_score_loss': {
         'rpn_batch_size_per_im': 256,
     },
@@ -106,6 +118,9 @@ MASKRCNN_CFG.override({
     },
     'frcnn_box_loss': {
         'huber_loss_delta': 1.0,
+    },
+    'frcnn_cuboid_loss': {
+        'huber_loss_delta': 0.1,
     },
     'roi_proposal': {
         'rpn_pre_nms_top_k': 2000,

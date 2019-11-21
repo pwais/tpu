@@ -306,6 +306,95 @@ class MaskrcnnHead(object):
     return mask_outputs
 
 
+class FastrcnnCuboidHead(object):
+  """Fast R-CNN cuboid head."""
+
+  def __init__(self,
+               mlp_head_dim,
+               cuboid_yaw_num_bins=8,
+               use_batch_norm=True,
+               batch_norm_relu=nn_ops.BatchNormRelu()):
+    """Initialize params to build Fast R-CNN cuboid head.
+
+    Args:
+      mlp_head_dim: a integer that is the hidden dimension in the
+        fully-connected layers.
+      cuboid_yaw_num_bins: `int`, number of bins for cuboid yaw multi-bin
+        prediction.
+      use_batch_norm: 'bool', indicating whether batchnorm layers are added.
+      batch_norm_relu: an operation that includes a batch normalization layer
+        followed by a relu layer(optional).
+    """
+    self._mlp_head_dim = mlp_head_dim
+    self._use_batch_norm = use_batch_norm
+    self._cuboid_yaw_num_bins = cuboid_yaw_num_bins
+    self._batch_norm_relu = batch_norm_relu
+
+  def __call__(self,
+               roi_features,
+               is_training=False):
+    """Box and class branches for the Mask-RCNN model.
+
+    Args:
+      roi_features: A ROI feature tensor of shape
+        [batch_size, num_rois, height_l, width_l, num_filters].
+      is_training: `boolean`, if True if model is in training mode.
+
+    Returns:
+      name_to_head: a dict of key -> output tensor, each of shape 
+        [batch_size, num_rois, size], where size is the size of the
+        cuboid (sub) head.
+    """
+
+    def create_head(name, num_outputs, top_activation=None):
+      head_roi_features = roi_features
+      # reshape inputs before FC.
+      _, num_rois, height, width, filters = (
+        head_roi_features.get_shape().as_list())
+      head_roi_features = tf.reshape(
+          head_roi_features, [-1, num_rois, height * width * filters])
+      net = tf.layers.dense(head_roi_features,
+                            units=self._mlp_head_dim,
+                            activation=(
+                                None if self._use_batch_norm else tf.nn.relu),
+                            name='fc6_%s' % name)
+      if self._use_batch_norm:
+        net = self._batch_norm_relu(net, is_training=is_training)
+      net = tf.layers.dense(net,
+                            units=self._mlp_head_dim,
+                            activation=(
+                                None if self._use_batch_norm else tf.nn.relu),
+                            name='fc7_%s' % name)
+      if self._use_batch_norm:
+        net = self._batch_norm_relu(net, is_training=is_training)
+
+      outputs = tf.layers.dense(
+          net,
+          num_outputs,
+          kernel_initializer=tf.random_normal_initializer(stddev=0.01),
+          bias_initializer=tf.zeros_initializer(),
+          activation=top_activation,
+          name='%s-predict')
+
+      return outputs
+    
+    def predict_depth(logits):
+      # Following Hu et al., we predict inverse depth.
+      # https://github.com/ucbdrive/3d-vehicle-tracking/blob/ce54b2461c8983aef265ed043dec976c6035d431/3d-tracking/utils/network_utils.py#L115
+      # (-inf, inf) -> [0, 1]
+      depth_activation = tf.math.sigmoid(logits)
+      # [0, 1] -> [0, inf)
+      return 1. / (depth_activation + 1e-6) - 1. / (1 + 1e-6)
+
+    name_to_head = {
+      'cuboid_center': create_head('center', 2),
+      'cuboid_depth': create_head('depth', 1, top_activation=predict_depth),
+      'cuboid_yaw': create_head('yaw', 3 * self._cuboid_yaw_num_bins),
+      'cuboid_size': create_head('size', 3),
+    }
+    return name_to_head
+
+
 class RetinanetHead(object):
   """RetinaNet head."""
 
@@ -333,6 +422,9 @@ class RetinanetHead(object):
       num_filters: `int` number of filters used in the head architecture.
       use_separable_conv: `bool` to indicate whether to use separable
         convoluation.
+      predict_cuboids: `bool`, toggle cuboid branch of head.
+      cuboid_yaw_num_bins: `int`, number of bins for cuboid yaw multi-bin
+        prediction.
       use_batch_norm: 'bool', indicating whether batchnorm layers are added.
       batch_norm_relu: an operation that includes a batch normalization layer
         followed by a relu layer(optional).
@@ -475,16 +567,16 @@ class RetinanetHead(object):
             features,
             self._num_filters,
             kernel_size=(3, 3),
-            activation=None,
+            activation=(None if self._use_batch_norm else tf.nn.relu),
             bias_initializer=tf.zeros_initializer(),
             padding='same',
             name='cuboid_%s_%s_%s' % (name, level, i))
-        # The convolution layers in the box net are shared among all levels, but
-        # each level has its batch normlization to capture the statistical
-        # difference among different levels.
-        features = self._batch_norm_relu(
-          features, is_training=is_training,
-          name='cuboid_%s_%s_%s'% (name, level, i))
+        if self._use_batch_norm:
+          # The convolution layers in the class net are shared among all levels,
+          # but each level has its batch normlization to capture the statistical
+          # difference among different levels.
+          features = self._batch_norm_relu(features, is_training=is_training,
+                                      name='cuboid_%s_%s_%s'% (name, level, i))
       if self._use_separable_conv:
         conv2d_op = functools.partial(
             tf.layers.separable_conv2d, depth_multiplier=1)

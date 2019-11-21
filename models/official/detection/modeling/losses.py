@@ -349,6 +349,91 @@ class MaskrcnnLoss(object):
           reduction=tf.losses.Reduction.SUM_BY_NONZERO_WEIGHTS)
 
 
+class FastrcnnCuboidLoss(object):
+  """Fast R-CNN cuboid loss function."""
+
+  def __init__(self, params):
+    self._cuboid_huber_loss_delta = params.huber_loss_delta
+    self._cuboid_yaw_use_ego = params.cuboid_yaw_use_ego
+    self._cuboid_yaw_num_bins = params.cuboid_yaw_num_bins
+    self._cuboid_yaw_loss_weight = params.cuboid_yaw_loss_weight
+    self._cuboid_yaw_loss_residual_weight = (
+      params.cuboid_yaw_loss_residual_weight)
+
+  def __call__(self, box_outputs, class_targets, box_targets):
+    """Computes the cuboid loss for Fast-RCNN.
+
+    This function implements the box regression loss of the Fast-RCNN. As the
+    `box_outputs` produces `num_classes` boxes for each RoI, the reference model
+    expands `box_targets` to match the shape of `box_outputs` and selects only
+    the target that the RoI has a maximum overlap. (Reference: https://github.com/facebookresearch/Detectron/blob/master/detectron/roi_data/fast_rcnn.py)  # pylint: disable=line-too-long
+    Instead, this function selects the `box_outputs` by the `class_targets` so
+    that it doesn't expand `box_targets`.
+
+    The box loss is smooth L1-loss on only positive samples of RoIs.
+    Reference: https://github.com/facebookresearch/Detectron/blob/master/detectron/modeling/fast_rcnn_heads.py  # pylint: disable=line-too-long
+
+    Args:
+      box_outputs: a float tensor representing the box prediction for each box
+        with a shape of [batch_size, num_boxes, num_classes * 4].
+      class_targets: a float tensor representing the class label for each box
+        with a shape of [batch_size, num_boxes].
+      box_targets: a float tensor representing the box label for each box
+        with a shape of [batch_size, num_boxes, 4].
+
+    Returns:
+      box_loss: a scalar tensor representing total box regression loss.
+    """
+    with tf.name_scope('fast_rcnn_loss'):
+      class_targets = tf.to_int32(class_targets)
+
+      # Selects the box from `box_outputs` based on `class_targets`, with which
+      # the box has the maximum overlap.
+      (batch_size, num_rois,
+       num_class_specific_boxes) = box_outputs.get_shape().as_list()
+      num_classes = num_class_specific_boxes // 4
+      box_outputs = tf.reshape(box_outputs,
+                               [batch_size, num_rois, num_classes, 4])
+
+      box_indices = tf.reshape(
+          class_targets + tf.tile(
+              tf.expand_dims(
+                  tf.range(batch_size) * num_rois * num_classes, 1),
+              [1, num_rois]) + tf.tile(
+                  tf.expand_dims(tf.range(num_rois) * num_classes, 0),
+                  [batch_size, 1]), [-1])
+
+      box_outputs = tf.matmul(
+          tf.one_hot(
+              box_indices,
+              batch_size * num_rois * num_classes,
+              dtype=box_outputs.dtype), tf.reshape(box_outputs, [-1, 4]))
+      box_outputs = tf.reshape(box_outputs, [batch_size, -1, 4])
+
+      return self._fast_rcnn_box_loss(box_outputs, box_targets, class_targets,
+                                      delta=self._delta)
+
+  def _fast_rcnn_box_loss(self, box_outputs, box_targets, class_targets,
+                          normalizer=1.0, delta=1.):
+    """Computes box regression loss."""
+    # The delta is typically around the mean value of regression target.
+    # for instances, the regression targets of 512x512 input with 6 anchors on
+    # P2-P6 pyramid is about [0.1, 0.1, 0.2, 0.2].
+    with tf.name_scope('fast_rcnn_box_loss'):
+      mask = tf.tile(tf.expand_dims(tf.greater(class_targets, 0), axis=2),
+                     [1, 1, 4])
+      # The loss is normalized by the sum of non-zero weights before additional
+      # normalizer provided by the function caller.
+      box_loss = tf.losses.huber_loss(
+          box_targets,
+          box_outputs,
+          weights=mask,
+          delta=delta,
+          reduction=tf.losses.Reduction.SUM_BY_NONZERO_WEIGHTS)
+      box_loss /= normalizer
+      return box_loss
+
+
 class RetinanetClassLoss(object):
   """RetinaNet class loss."""
 

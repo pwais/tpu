@@ -28,6 +28,7 @@ from ops import postprocess_ops
 from ops import roi_ops
 from ops import sampling_ops
 from ops import spatial_transform_ops
+from utils import benchmark_utils
 from utils import box_utils
 
 
@@ -38,6 +39,7 @@ class MaskrcnnModel(base_model.Model):
     super(MaskrcnnModel, self).__init__(params)
 
     self._include_mask = params.architecture.include_mask
+    self._include_cuboids = params.architecture.include_cuboids
 
     # Architecture generators.
     self._backbone_fn = factory.backbone_generator(params)
@@ -50,6 +52,10 @@ class MaskrcnnModel(base_model.Model):
     self._frcnn_head_fn = factory.fast_rcnn_head_generator(params.frcnn_head)
     if self._include_mask:
       self._mrcnn_head_fn = factory.mask_rcnn_head_generator(params.mrcnn_head)
+    self._cuboid_head_fn = None
+    if self._include_cuboids:
+      self._cuboid_head_fn = (
+        factory.fast_rcnn_cuboid_head_generator(params.frcnn_cuboid_head))
 
     # Loss function.
     self._rpn_score_loss_fn = losses.RpnScoreLoss(params.rpn_score_loss)
@@ -58,6 +64,8 @@ class MaskrcnnModel(base_model.Model):
     self._frcnn_box_loss_fn = losses.FastrcnnBoxLoss(params.frcnn_box_loss)
     if self._include_mask:
       self._mask_loss_fn = losses.MaskrcnnLoss()
+    if self._include_cuboids:
+      self._cuboid_loss_fn = losses.FastrcnnCuboidLoss(params.frcnn_cuboid_loss)
 
     self._generate_detections_fn = postprocess_ops.GenericDetectionGenerator(
         params.postprocess)
@@ -70,6 +78,11 @@ class MaskrcnnModel(base_model.Model):
 
     backbone_features = self._backbone_fn(features, is_training)
     fpn_features = self._fpn_fn(backbone_features, is_training)
+
+    # Print number of parameters and FLOPS in model.
+    batch_size, _, _, _ = list(backbone_features.values())[0].get_shape().as_list()  # pylint: disable=line-too-long
+    benchmark_utils.compute_model_statistics(
+        batch_size, is_training=(mode == mode_keys.TRAIN))
 
     rpn_score_outputs, rpn_box_outputs = self._rpn_head_fn(
         fpn_features, is_training)

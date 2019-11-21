@@ -127,6 +127,14 @@ def mask_rcnn_head_generator(params):
                             batch_norm_relu=batch_norm_relu_generator(
                                 params.batch_norm))
 
+def fast_rcnn_cuboid_head_generator(params):
+  """Generator function for Fast R-CNN cuboid head architecture."""
+  return heads.FastrcnnCuboidHead(
+    params.fast_rcnn_mlp_head_dim,
+    cuboid_yaw_num_bins=params.cuboid_yaw_num_bins,
+    use_batch_norm=params.use_batch_norm,
+    batch_norm_relu=batch_norm_relu_generator(
+        params.batch_norm))
 
 def shapeprior_head_generator(params):
   """Generator function for RetinaNet head architecture."""
