@@ -130,6 +130,7 @@ def mask_rcnn_head_generator(params):
 def fast_rcnn_cuboid_head_generator(params):
   """Generator function for Fast R-CNN cuboid head architecture."""
   return heads.FastrcnnCuboidHead(
+    params.num_classes,
     params.fast_rcnn_mlp_head_dim,
     cuboid_yaw_num_bins=params.cuboid_yaw_num_bins,
     use_batch_norm=params.use_batch_norm,

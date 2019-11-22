@@ -172,7 +172,8 @@ class MaskrcnnModel(base_model.Model):
       mask_roi_features = spatial_transform_ops.multilevel_crop_and_resize(
           fpn_features, rpn_rois, output_size=14)
 
-      mask_outputs = self._mrcnn_head_fn(mask_roi_features, classes, is_training)
+      mask_outputs = self._mrcnn_head_fn(
+        mask_roi_features, classes, is_training)
 
       if is_training:
         model_outputs.update({
@@ -215,7 +216,8 @@ class MaskrcnnModel(base_model.Model):
 
       cu_roi_features = spatial_transform_ops.multilevel_crop_and_resize(
         fpn_features, cu_rpn_rois, output_size=14)
-      cuboid_outputs = self._cuboid_head_fn(cu_roi_features, is_training)
+      cuboid_outputs = self._cuboid_head_fn(
+        cu_roi_features, cu_classes, is_training)
       model_outputs.update({
         'cuboid_outputs': cuboid_outputs,
       })

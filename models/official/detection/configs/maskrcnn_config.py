@@ -102,6 +102,7 @@ MASKRCNN_CFG.override({
         },
     },
     'frcnn_cuboid_head': {
+        'num_classes': 91,
         'cuboid_yaw_num_bins': 8,
         'fast_rcnn_mlp_head_dim': 1024,
         'use_batch_norm': False,
@@ -174,6 +175,8 @@ MASKRCNN_RESTRICTIONS = [
     'anchor.min_level == rpn_head.min_level',
     'anchor.max_level == rpn_head.max_level',
     'mrcnn_head.mask_target_size == mask_sampling.mask_target_size',
+    'mrcnn_head.num_classes == frcnn_head.num_classes',
+    'frcnn_cuboid_head.num_classes == frcnn_head.num_classes',
     'frcnn_cuboid_head.cuboid_yaw_num_bins == frcnn_cuboid_loss.cuboid_yaw_num_bins',
 ]
 # pylint: enable=line-too-long

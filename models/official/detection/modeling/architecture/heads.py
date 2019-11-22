@@ -310,6 +310,7 @@ class FastrcnnCuboidHead(object):
   """Fast R-CNN cuboid head."""
 
   def __init__(self,
+               num_classes,
                mlp_head_dim,
                cuboid_yaw_num_bins=8,
                use_batch_norm=True,
@@ -317,6 +318,8 @@ class FastrcnnCuboidHead(object):
     """Initialize params to build Fast R-CNN cuboid head.
 
     Args:
+      num_classes: `int` the number of classes; we use class-specific heads
+        by default (as does Facebook).
       mlp_head_dim: a integer that is the hidden dimension in the
         fully-connected layers.
       cuboid_yaw_num_bins: `int`, number of bins for cuboid yaw multi-bin
@@ -325,6 +328,7 @@ class FastrcnnCuboidHead(object):
       batch_norm_relu: an operation that includes a batch normalization layer
         followed by a relu layer(optional).
     """
+    self._num_classes = num_classes
     self._mlp_head_dim = mlp_head_dim
     self._use_batch_norm = use_batch_norm
     self._cuboid_yaw_num_bins = cuboid_yaw_num_bins
@@ -332,12 +336,15 @@ class FastrcnnCuboidHead(object):
 
   def __call__(self,
                roi_features,
+               class_indices,
                is_training=False):
     """Box and class branches for the Mask-RCNN model.
 
     Args:
       roi_features: A ROI feature tensor of shape
         [batch_size, num_rois, height_l, width_l, num_filters].
+      class_indices: a Tensor of shape [batch_size, num_rois], indicating
+        which class the ROI is.
       is_training: `boolean`, if True if model is in training mode.
 
     Returns:
@@ -368,14 +375,29 @@ class FastrcnnCuboidHead(object):
       if self._use_batch_norm:
         net = self._batch_norm_relu(net, is_training=is_training)
 
-      outputs = tf.layers.dense(
+      logits = tf.layers.dense(
           net,
-          num_outputs,
+          self._num_classes * num_outputs,
           kernel_initializer=tf.random_normal_initializer(stddev=0.01),
           bias_initializer=tf.zeros_initializer(),
           activation=top_activation,
-          name='%s-predict' % name)
-      print(outputs)
+          name='%s-logits' % name)
+      print(logits) # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+      with tf.name_scope('cuboid_%s_post_processing' % name):
+        batch_size, num_cuboids = class_indices.get_shape().as_list()
+        outputs = tf.reshape(
+          logits, [batch_size, num_cuboids, self._num_classes, num_outputs])
+        # mask_outputs = tf.transpose(mask_outputs, [0, 1, 4, 2, 3])
+        # Contructs indices for gather.
+        batch_indices = tf.tile(
+            tf.expand_dims(tf.range(batch_size), axis=1), [1, num_cuboids])
+        cuboid_indices = tf.tile(
+            tf.expand_dims(tf.range(num_cuboids), axis=0), [batch_size, 1])
+        gather_indices = tf.stack(
+            [batch_indices, cuboid_indices, class_indices], axis=2)
+        outputs = tf.gather_nd(outputs, gather_indices)
+      outputs = tf.identity(outputs, name='%s-outputs' % name)
+      print(outputs) # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
       return outputs
     
     def predict_depth(logits):
