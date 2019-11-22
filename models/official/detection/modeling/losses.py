@@ -463,6 +463,8 @@ class RetinanetCuboidLoss(object):
     self._cuboid_yaw_loss_residual_weight = (
       params.cuboid_yaw_loss_residual_weight)
     self._cuboid_huber_loss_delta = params.cuboid_huber_loss_delta
+    self._focal_loss_alpha = params.focal_loss_alpha
+    self._focal_loss_gamma = params.focal_loss_gamma
 
   def __call__(self, cuboid_outputs, labels, num_positives):
     """Computes cuboid estimation loss.
@@ -505,7 +507,7 @@ class RetinanetCuboidLoss(object):
       label_y = tf.expand_dims(labels['cuboid/box/center_y'][level], -1)
       label_xy = tf.concat([label_x, label_y], axis=-1)
       center_losses.append(
-        self._regression_loss(pred_xy, label_xy, num_positives_sum))
+        self._regress(pred_xy, label_xy, num_positives_sum))
     # Sums per level losses to total loss.
     return tf.add_n(center_losses)
 
@@ -516,7 +518,7 @@ class RetinanetCuboidLoss(object):
       label_depth = tf.expand_dims(
         labels['cuboid/box/center_depth'][level], -1)
       depth_losses.append(
-        self._regression_loss(pred_depth, label_depth, num_positives_sum))
+        self._regress(pred_depth, label_depth, num_positives_sum))
     # Sums per level losses to total loss.
     return tf.add_n(depth_losses)
 
@@ -575,15 +577,16 @@ class RetinanetCuboidLoss(object):
       pred_cos_th /= normalizer
       pred_sin_th /= normalizer
 
-      # pred_cos_th = tf.check_numerics(pred_cos_th, 'pred_cos_th')
-      # target_residual_cos_th = tf.check_numerics(target_residual_cos_th, 'target_residual_cos_th')
-      # tf.stop_gradient
-      # # Less numerical stability, but our dimensionality is small
-      # pred_bin_softmax = tf.nn.softmax(pred_bin)
-      # bin_loss = -1 * target_bin * tf.log(pred_bin_softmax)
-      bin_loss = tf.nn.softmax_cross_entropy_with_logits(
-                        labels=target_bin, logits=pred_bin,
-                        name='bin_loss_%s' % level)
+      # Loss for the angle bin
+      # bin_loss = tf.nn.softmax_cross_entropy_with_logits(
+      #                   labels=target_bin, logits=pred_bin,
+      #                   name='bin_loss_%s' % level)
+      bin_loss = tf.reduce_sum(
+                    focal_loss(
+                      pred_bin, target_bin,
+                      self._focal_loss_alpha, self._focal_loss_gamma,
+                      1), # Normalize below instead
+                    axis=-1)
 
       # Give the target bin residual more weight
       resid_weights = target_bin + 1e-3
@@ -657,11 +660,11 @@ class RetinanetCuboidLoss(object):
                     tf.expand_dims(label_h, axis=-1)],
                     axis=-1)
       size_losses.append(
-        self._regression_loss(pred_lwh, label_lwh, num_positives_sum))
+        self._regress(pred_lwh, label_lwh, num_positives_sum))
     # Sums per level losses to total loss.
     return tf.add_n(size_losses)
 
-  def _regression_loss(self, r_outputs, r_targets, num_positives,
+  def _regress(self, r_outputs, r_targets, num_positives,
                  ignore_label=float('-inf')):
     """Computes a RetinaNet regression loss."""
     r_dims = r_targets.get_shape().as_list()[-1]
