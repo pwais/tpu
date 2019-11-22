@@ -196,6 +196,12 @@ class MaskrcnnModel(base_model.Model):
 
         cu_classes = tf.cast(cu_classes, dtype=tf.int32)
 
+        # FIXME ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+        self.add_scalar_summary('cu_classes_frac_nonzero', 
+          tf.reduce_sum(
+            tf.cast(tf.greater(cu_classes, 0), tf.int32)) / 
+              tf.math.reduce_prod(tf.shape(cu_classes)))
+
         model_outputs.update({
             'cuboid_targets': fg_cuboids,
             'sampled_cuboid_class_targets': cu_classes,
@@ -224,9 +230,9 @@ class MaskrcnnModel(base_model.Model):
     losses['rpn_box_loss'] = self._rpn_box_loss_fn(
         outputs['rpn_box_outputs'], labels['rpn_box_targets'])
 
-    losses['frcnn_class_loss'] = self._frcnn_class_loss_fn(
+    losses['fast_rcnn_class_loss'] = self._frcnn_class_loss_fn(
         outputs['class_outputs'], outputs['class_targets'])
-    losses['frcnn_box_loss'] = self._frcnn_box_loss_fn(
+    losses['fast_rcnn_box_loss'] = self._frcnn_box_loss_fn(
         outputs['box_outputs'],
         outputs['class_targets'],
         outputs['box_targets'])
