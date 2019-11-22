@@ -48,6 +48,7 @@ class MaskrcnnModel(base_model.Model):
     self._generate_rois_fn = roi_ops.ROIGenerator(params.roi_proposal)
     self._sample_rois_fn = sampling_ops.ROISampler(params.roi_sampling)
     self._sample_masks_fn = sampling_ops.MaskSampler(params.mask_sampling)
+    self._sample_cuboids_fn = sampling_ops.CuboidSampler(params.cuboid_sampling)
 
     self._frcnn_head_fn = factory.fast_rcnn_head_generator(params.frcnn_head)
     if self._include_mask:
@@ -131,58 +132,86 @@ class MaskrcnnModel(base_model.Model):
         'box_outputs': box_outputs,
     })
 
-    cuboid_outputs = {}
-    if self._include_cuboids:
-      cuboid_outputs = self._cuboid_head_fn(roi_features, is_training)
-      model_outputs.update({
-        'cuboid_outputs': cuboid_outputs,
-      })
-
+    # Core detections
     if not is_training:
-      boxes, scores, classes, valid_detections, cuboids = (
+      # boxes, scores, classes, valid_detections, cuboids = (
+      #   self._generate_detections_fn(
+      #     box_outputs, class_outputs, rpn_rois,
+      #     labels['image_info'][:, 1:2, :], cuboid_outputs=cuboid_outputs))
+      #     # TODO even needed cuboid_outputs ? ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+      boxes, scores, classes, valid_detections, _ = (
         self._generate_detections_fn(
           box_outputs, class_outputs, rpn_rois,
-          labels['image_info'][:, 1:2, :], cuboid_outputs=cuboid_outputs))
-          # TODO even needed cuboid_outputs ? ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+          labels['image_info'][:, 1:2, :]))
       model_outputs.update({
           'num_detections': valid_detections,
           'detection_boxes': boxes,
           'detection_classes': classes,
           'detection_scores': scores,
-          'detection_cuboids': cuboids,
       })
 
-    if not self._include_mask:
-      return model_outputs
+    # Do mask sampling and detections
+    if self._include_mask:
+      if is_training:
+        rpn_rois, classes, mask_targets = self._sample_masks_fn(
+            rpn_rois, matched_gt_boxes, matched_gt_classes, matched_gt_indices,
+            labels['gt_masks'])
+        mask_targets = tf.stop_gradient(mask_targets)
 
-    if is_training:
-      rpn_rois, classes, mask_targets = self._sample_masks_fn(
-          rpn_rois, matched_gt_boxes, matched_gt_classes, matched_gt_indices,
-          labels['gt_masks'])
-      mask_targets = tf.stop_gradient(mask_targets)
+        classes = tf.cast(classes, dtype=tf.int32)
 
-      classes = tf.cast(classes, dtype=tf.int32)
+        model_outputs.update({
+            'mask_targets': mask_targets,
+            'sampled_class_targets': classes,
+        })
+      else:
+        # From core detections above
+        rpn_rois = boxes
+        classes = tf.cast(classes, dtype=tf.int32)
 
+      mask_roi_features = spatial_transform_ops.multilevel_crop_and_resize(
+          fpn_features, rpn_rois, output_size=14)
+
+      mask_outputs = self._mrcnn_head_fn(mask_roi_features, classes, is_training)
+
+      if is_training:
+        model_outputs.update({
+            'mask_outputs': mask_outputs,
+        })
+      else:
+        model_outputs.update({
+            'detection_masks': tf.nn.sigmoid(mask_outputs)
+        })
+      
+    # Do cuboid sampling and detections
+    if self._include_cuboids:
+      if is_training:
+        # Sample proposals
+        cu_rpn_rois, cu_classes, fg_cuboids = self._sample_cuboids_fn(
+            rpn_rois, matched_gt_boxes, matched_gt_classes, matched_gt_indices,
+            labels['cuboid_targets'])
+        fg_cuboids = dict(
+          (prop_key, tf.stop_gradient(prop_value))
+          for prop_key, prop_value in fg_cuboids.items())
+
+        cu_classes = tf.cast(cu_classes, dtype=tf.int32)
+
+        model_outputs.update({
+            'cuboid_targets': fg_cuboids,
+            'sampled_cuboid_class_targets': cu_classes,
+        })
+      else:
+        # From core detections above
+        cu_rpn_rois = boxes
+        cu_classes = tf.cast(classes, dtype=tf.int32)
+
+      # cuboid_outputs = self._cuboid_head_fn(roi_features, is_training)
+
+      cu_roi_features = spatial_transform_ops.multilevel_crop_and_resize(
+        fpn_features, cu_rpn_rois, output_size=14)
+      cuboid_outputs = self._cuboid_head_fn(cu_roi_features, is_training)
       model_outputs.update({
-          'mask_targets': mask_targets,
-          'sampled_class_targets': classes,
-      })
-    else:
-      rpn_rois = boxes
-      classes = tf.cast(classes, dtype=tf.int32)
-
-    mask_roi_features = spatial_transform_ops.multilevel_crop_and_resize(
-        fpn_features, rpn_rois, output_size=14)
-
-    mask_outputs = self._mrcnn_head_fn(mask_roi_features, classes, is_training)
-
-    if is_training:
-      model_outputs.update({
-          'mask_outputs': mask_outputs,
-      })
-    else:
-      model_outputs.update({
-          'detection_masks': tf.nn.sigmoid(mask_outputs)
+        'cuboid_outputs': cuboid_outputs,
       })
 
     return model_outputs
@@ -205,7 +234,8 @@ class MaskrcnnModel(base_model.Model):
     if self._include_cuboids:
       cuboid_losses = self._cuboid_loss_fn(
         outputs['cuboid_outputs'],
-        outputs['class_targets'], labels['cuboid_targets'])
+        outputs['cuboid_targets'],
+        outputs['sampled_cuboid_class_targets'])
       for cuboid_prop, loss_value in cuboid_losses.items():
         loss_value = self._cuboid_total_loss_weight * loss_value
         losses[cuboid_prop + '_loss'] = loss_value

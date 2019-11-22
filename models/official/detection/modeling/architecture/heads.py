@@ -374,8 +374,8 @@ class FastrcnnCuboidHead(object):
           kernel_initializer=tf.random_normal_initializer(stddev=0.01),
           bias_initializer=tf.zeros_initializer(),
           activation=top_activation,
-          name='%s-predict')
-
+          name='%s-predict' % name)
+      print(outputs)
       return outputs
     
     def predict_depth(logits):

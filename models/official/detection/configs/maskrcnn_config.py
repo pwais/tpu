@@ -19,31 +19,6 @@ import sys
 sys.path.insert(0, 'tpu/models')
 from hyperparameters import params_dict
 
-TODO
-"""
-architecture:
-  cuboid_total_loss_weight: 0.1
-
-maskrcnn_parser:
-  include_cuboids: True
-  aug_rand_hflip: False
-  aug_scale_min: 1.0
-  aug_scale_max: 1.0
-
-frcnn_cuboid_loss
-  huber_loss_delta: 0.1
-  cuboid_yaw_use_ego: False
-  cuboid_yaw_num_bins: 8
-  cuboid_yaw_loss_weight: 0.1
-  cuboid_yaw_loss_residual_weight: 0.1
-
-postprocess:
-  max_total_size: 200
-
-!! scales from retinanet, maybe more boxes
-"""
-
-
 # pylint: disable=line-too-long
 MASKRCNN_CFG = params_dict.ParamsDict(base_config.BASE_CFG)
 MASKRCNN_CFG.override({
@@ -178,6 +153,9 @@ MASKRCNN_CFG.override({
         'num_mask_samples_per_image': 128,  # Typically = `num_samples_per_image` * `fg_fraction`.
         'mask_target_size': 28,
     },
+    'cuboid_sampling': {
+        'num_cuboid_samples_per_image': 128,
+    },
     'postprocess': {
         'use_batched_nms': False,
         'max_total_size': 100,
@@ -196,5 +174,6 @@ MASKRCNN_RESTRICTIONS = [
     'anchor.min_level == rpn_head.min_level',
     'anchor.max_level == rpn_head.max_level',
     'mrcnn_head.mask_target_size == mask_sampling.mask_target_size',
+    'frcnn_cuboid_head.cuboid_yaw_num_bins == frcnn_cuboid_loss.cuboid_yaw_num_bins',
 ]
 # pylint: enable=line-too-long

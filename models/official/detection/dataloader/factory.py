@@ -68,6 +68,7 @@ def parser_generator(params, mode):
         skip_crowd_during_training=parser_params.skip_crowd_during_training,
         max_num_instances=parser_params.max_num_instances,
         include_mask=parser_params.include_mask,
+        include_cuboids=parser_params.include_cuboids,
         mask_crop_size=parser_params.mask_crop_size,
         use_bfloat16=parser_params.use_bfloat16,
         mode=mode)

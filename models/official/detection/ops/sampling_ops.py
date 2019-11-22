@@ -399,3 +399,80 @@ class MaskSampler(object):
             self._num_mask_samples_per_image,
             self._mask_target_size))
     return foreground_rois, foreground_classes, cropped_foreground_masks
+
+
+class CuboidSampler(object):
+  """Samples and creates cuboid training targets."""
+
+  def __init__(self, params):
+    self._num_cuboid_samples_per_image = params.num_cuboid_samples_per_image
+
+  def __call__(self,
+               candidate_rois,
+               candidate_gt_boxes,
+               candidate_gt_classes,
+               candidate_gt_indices,
+               gt_cuboids):
+    """Sample and create cuboid targets for training.
+
+    Args:
+      candidate_rois: a tensor of shape of [batch_size, N, 4], where N is the
+        number of candidate RoIs to be considered for mask sampling. It includes
+        both positive and negative RoIs. The `num_mask_samples_per_image`
+        positive RoIs will be sampled to create mask training targets.
+      candidate_gt_boxes: a tensor of shape of [batch_size, N, 4], storing the
+        corresponding groundtruth boxes to the `candidate_rois`.
+      candidate_gt_classes: a tensor of shape of [batch_size, N], storing the
+        corresponding groundtruth classes to the `candidate_rois`. 0 in the
+        tensor corresponds to the background class, i.e. negative RoIs.
+      candidate_gt_indices: a tensor of shape [batch_size, N], storing the
+        corresponding groundtruth instance indices to the `candidate_gt_boxes`,
+        i.e. gt_boxes[candidate_gt_indices[:, i]] = candidate_gt_boxes[:, i],
+        where gt_boxes which is of shape [batch_size, MAX_INSTANCES, 4], M >= N,
+        is the superset of candidate_gt_boxes.
+      gt_cuboids: a dict of cuboid property -> tensor of
+        [batch_size, MAX_INSTANCES, property_size] containing all the
+        groundtruth cuboids which sample cuboids are drawn from.
+
+    Returns:
+      foreground_rois: a tensor of shape of [batch_size, K, 4] storing the RoI
+        that corresponds to the sampled foreground cuboids, where
+        K = num_cuboid_samples_per_image.
+      foreground_classes: a tensor of shape of [batch_size, K] storing the
+        classes corresponding to the sampled foreground cuboids.
+      foreground_cuboids: a dict of cuboid property -> tensor of shape of
+        [batch_size, K, property_size] storing the foreground cuboids used
+        for training.
+    """
+    with tf.name_scope('sample_foreground_cuboids'):
+      _, fg_instance_indices = tf.nn.top_k(
+          tf.cast(tf.greater(candidate_gt_classes, 0), dtype=tf.int32),
+          k=self._num_cuboid_samples_per_image)
+
+      fg_instance_indices_shape = tf.shape(fg_instance_indices)
+      batch_indices = (
+          tf.expand_dims(tf.range(fg_instance_indices_shape[0]), axis=-1) *
+          tf.ones([1, fg_instance_indices_shape[-1]], dtype=tf.int32))
+
+      gather_nd_instance_indices = tf.stack(
+          [batch_indices, fg_instance_indices], axis=-1)
+      foreground_rois = tf.gather_nd(
+          candidate_rois, gather_nd_instance_indices)
+      foreground_boxes = tf.gather_nd(
+          candidate_gt_boxes, gather_nd_instance_indices)
+      foreground_classes = tf.gather_nd(
+          candidate_gt_classes, gather_nd_instance_indices)
+      foreground_gt_indices = tf.gather_nd(
+          candidate_gt_indices, gather_nd_instance_indices)
+
+      foreground_gt_indices_shape = tf.shape(foreground_gt_indices)
+      batch_indices = (
+          tf.expand_dims(tf.range(foreground_gt_indices_shape[0]), axis=-1) *
+          tf.ones([1, foreground_gt_indices_shape[-1]], dtype=tf.int32))
+      gather_nd_gt_indices = tf.stack(
+          [batch_indices, foreground_gt_indices], axis=-1)
+      foreground_cuboids = dict(
+        (prop_key, tf.gather_nd(gt_value, gather_nd_gt_indices))
+        for prop_key, gt_value in gt_cuboids.items())
+      
+      return foreground_rois, foreground_classes, foreground_cuboids

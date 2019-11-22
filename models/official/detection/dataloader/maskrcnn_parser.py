@@ -401,6 +401,10 @@ class Parser(object):
         'filename_utf8s': data['filename_utf8s'],
           # TPU does not support strings :(
     }
+    if self._include_cuboids:
+      labels['cuboid_targets'] = self.__get_cuboid_targets(data, indices)
+
+    # TODO: if self._include_mask section?
 
     if self._mode == ModeKeys.PREDICT_WITH_GT:
       # Converts boxes from normalized coordinates to pixel coordinates.
