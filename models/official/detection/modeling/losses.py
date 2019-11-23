@@ -393,15 +393,17 @@ class FastrcnnCuboidLoss(object):
       }
       return cuboid_losses
 
-  def _regression_loss(self, r_outputs, r_targets, weights):
+  def _regression_loss(self, r_outputs, r_targets, mask):
     """Computes a Fast RCNN regression loss."""
-    r_dims = r_targets.get_shape().as_list()[-1]
+    # r_dims = r_targets.get_shape().as_list()[-1]
     # normalizer = num_positives * r_dims TODO need this?
+    r_outputs = tf.where(
+              tf.equal(mask, True), tf.stop_gradient(r_outputs), r_outputs)
     r_loss = tf.losses.huber_loss(
         r_targets,
         r_outputs,
         delta=self._cuboid_huber_loss_delta,
-        weights=weights,
+        weights=mask,
         reduction=tf.losses.Reduction.SUM_BY_NONZERO_WEIGHTS)
     return r_loss
     # r_loss /= normalizer TODO need this?
@@ -474,7 +476,12 @@ class FastrcnnCuboidLoss(object):
     sin_thb = tf.math.sin(theta_bin)
 
     target_bin = 1. - tf.math.abs(target_yaw - theta_bin) / bin_size_rad
-    target_bin = tf.maximum(target_bin, tf.zeros_like(target_bin))
+    target_bin /= tf.expand_dims(tf.reduce_sum(target_bin, axis=-1), axis=-1)
+    # target_bin = tf.maximum(target_bin, tf.zeros_like(target_bin))
+    # target_bin = tf.where(
+    #     tf.greater(target_bin, 0.5),
+    #       tf.ones_like(target_bin),
+    #       tf.zeros_like(target_bin))
     target_residual_cos_th = tf.math.cos(target_yaw) - cos_thb
     target_residual_sin_th = tf.math.sin(target_yaw) - sin_thb
       
@@ -499,6 +506,7 @@ class FastrcnnCuboidLoss(object):
     pred_sin_th /= normalizer
 
     # Compute Loss!
+    # tf.nn.sigmoid_cross_entropy_with_logits(labels=targets, logits=logits)
     bin_loss = tf.nn.softmax_cross_entropy_with_logits(
                         labels=target_bin, logits=pred_bin,
                         name='bin_loss')
@@ -509,13 +517,13 @@ class FastrcnnCuboidLoss(object):
                         target_residual_cos_th,
                         pred_cos_th,
                         weights=resid_weights,
-                        delta=0.01, # TODO tune to bin_size_rad ~~~~~~~~~~~~~~~~~~~~
+                        delta=0.001, # TODO tune to bin_size_rad ~~~~~~~~~~~~~~~~~~~~
                         reduction=tf.losses.Reduction.SUM_BY_NONZERO_WEIGHTS)
     sin_resid_loss = tf.losses.huber_loss(
                         target_residual_sin_th,
                         pred_sin_th,
                         weights=resid_weights,
-                        delta=0.01, # TODO tune to bin_size_rad ~~~~~~~~~~~~~~~~~~~~~~~
+                        delta=0.001, # TODO tune to bin_size_rad ~~~~~~~~~~~~~~~~~~~~~~~
                         reduction=tf.losses.Reduction.SUM_BY_NONZERO_WEIGHTS)
 
     yaw_loss = (
