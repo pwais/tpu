@@ -356,7 +356,8 @@ class FastrcnnCuboidHead(object):
     """
 
     def create_head(name, num_outputs, top_activation=None):
-      head_roi_features = tf.cast(roi_features[name], tf.float32)
+      head_roi_features = roi_features[name]
+      print('head_roi_features', name, head_roi_features)
       # reshape inputs before FC.
       _, num_rois, height, width, filters = (
         head_roi_features.get_shape().as_list())
