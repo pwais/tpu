@@ -397,8 +397,8 @@ class FastrcnnCuboidLoss(object):
     """Computes a Fast RCNN regression loss."""
     # r_dims = r_targets.get_shape().as_list()[-1]
     # normalizer = num_positives * r_dims TODO need this?
-    r_outputs = tf.where(
-              tf.equal(mask, True), tf.stop_gradient(r_outputs), r_outputs)
+    # r_outputs = tf.where(
+    #           tf.equal(mask, True), tf.stop_gradient(r_outputs), r_outputs)
     r_loss = tf.losses.huber_loss(
         r_targets,
         r_outputs,
@@ -476,6 +476,7 @@ class FastrcnnCuboidLoss(object):
     sin_thb = tf.math.sin(theta_bin)
 
     target_bin = 1. - tf.math.abs(target_yaw - theta_bin) / bin_size_rad
+    target_bin = tf.maximum(target_bin, tf.zeros_like(target_bin))
     target_bin /= tf.expand_dims(tf.reduce_sum(target_bin, axis=-1), axis=-1)
     # target_bin = tf.maximum(target_bin, tf.zeros_like(target_bin))
     # target_bin = tf.where(
@@ -488,15 +489,15 @@ class FastrcnnCuboidLoss(object):
     # Prediction bins and residuals
     yaw_head_n_vals = preds.get_shape().as_list()[-1]
     assert 3 * n_bins == yaw_head_n_vals
-    # GUH https://github.com/tensorflow/tensorflow/issues/2540
-    # Even if we mask the loss below, TF will backprop some NaN gradients
-    # into the net weights unless we mask them here.  So we need to mask
-    # off predictions for background
-    preds_mask = FastrcnnCuboidLoss._loss_mask(preds, selected_class_targets)
-    # preds_mask = tf.tile(tf.expand_dims(tf.greater(class_targets, 0), axis=2),
-    #                  [1, 1, yaw_head_n_vals])
-    preds = tf.where(
-              tf.equal(preds_mask, True), tf.stop_gradient(preds), preds)
+    # # GUH https://github.com/tensorflow/tensorflow/issues/2540
+    # # Even if we mask the loss below, TF will backprop some NaN gradients
+    # # into the net weights unless we mask them here.  So we need to mask
+    # # off predictions for background
+    # preds_mask = FastrcnnCuboidLoss._loss_mask(preds, selected_class_targets)
+    # # preds_mask = tf.tile(tf.expand_dims(tf.greater(class_targets, 0), axis=2),
+    # #                  [1, 1, yaw_head_n_vals])
+    # preds = tf.where(
+    #           tf.equal(preds_mask, True), tf.stop_gradient(preds), preds)
 
     pred_bin =    preds[:, :, 0:n_bins]
     pred_cos_th = preds[:, :, n_bins:2*n_bins]
@@ -507,12 +508,22 @@ class FastrcnnCuboidLoss(object):
 
     # Compute Loss!
     # tf.nn.sigmoid_cross_entropy_with_logits(labels=targets, logits=logits)
-    bin_loss = tf.nn.softmax_cross_entropy_with_logits(
-                        labels=target_bin, logits=pred_bin,
-                        name='bin_loss')
+    # bin_loss = tf.nn.softmax_cross_entropy_with_logits(
+    #                     labels=target_bin, logits=pred_bin,
+    #                     name='bin_loss')
+    loss_mask = FastrcnnCuboidLoss._loss_mask(
+      preds, selected_class_targets, force_output_size=n_bins)
+    loss_mask = tf.cast(loss_mask, tf.float32)
+    bin_loss = tf.losses.sigmoid_cross_entropy(
+                  target_bin, logits=pred_bin, weights=loss_mask,
+                  reduction=tf.losses.Reduction.SUM_BY_NONZERO_WEIGHTS)
+    # bin_loss = tf.nn.sigmoid_cross_entropy_with_logits(
+    #                       labels=target_bin, logits=pred_bin,
+    #                       name='bin_loss')
+    # bin_loss = tf.reduce_
 
     # Give the target bin residual more weight
-    resid_weights = target_bin + 1e-3
+    resid_weights = loss_mask * (target_bin + 1e-3)
     cos_resid_loss = tf.losses.huber_loss(
                         target_residual_cos_th,
                         pred_cos_th,
@@ -531,11 +542,11 @@ class FastrcnnCuboidLoss(object):
       self._cuboid_yaw_loss_residual_weight * cos_resid_loss + 
       self._cuboid_yaw_loss_residual_weight * sin_resid_loss)
     
-    mask = FastrcnnCuboidLoss._loss_mask(
-      preds, selected_class_targets, force_output_size=1)
-    loss_mask = tf.squeeze(tf.cast(mask, tf.float32), axis=-1)
-    yaw_loss = loss_mask * yaw_loss
+    
+    # yaw_loss = loss_mask * yaw_loss
 
+    # normalizer = tf.reduce_sum(loss_mask) + 1
+    # yaw_loss = tf.reduce_sum(yaw_loss) / normalizer
     yaw_loss = tf.reduce_sum(yaw_loss)
     return self._cuboid_yaw_loss_weight * yaw_loss
 

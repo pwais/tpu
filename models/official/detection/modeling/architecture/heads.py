@@ -500,12 +500,14 @@ class FastrcnnCuboidHead(object):
     """
     
     def predict_depth(logits):
+      # NB: bfloat16 here diverges / is unstable
+      logits = tf.cast(logits, tf.float32)
       # Following Hu et al., we map to depth.
       # https://github.com/ucbdrive/3d-vehicle-tracking/blob/ce54b2461c8983aef265ed043dec976c6035d431/3d-tracking/utils/network_utils.py#L115
       # (-inf, inf) -> [0, 1]
-      # depth_activation = tf.math.sigmoid(logits)
+      depth_activation = tf.math.sigmoid(logits)
       # depth_activation = tf.nn.relu6(logits) / 6.
-      depth_activation = .5 * (tf.nn.tanh(logits) + 1)
+      # depth_activation = .5 * (tf.nn.tanh(logits) + 1)
       # [0, 1] -> [0, inf)
       return 1. / (depth_activation + 1e-6) - 1. / (1 + 1e-6)
 

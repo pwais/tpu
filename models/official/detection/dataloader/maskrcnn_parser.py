@@ -398,7 +398,7 @@ class Parser(object):
         'source_id': dataloader_utils.process_source_id(data['source_id']),
         'anchor_boxes': input_anchor.multilevel_boxes,
         'image_info': image_info,
-        'filename_utf8s': data['filename_utf8s'],
+        'filename_utf8s': data['filename_utf8s'].set_shape([10000]),
           # TPU does not support strings :(
     }
     if self._include_cuboids:
@@ -412,7 +412,7 @@ class Parser(object):
           data['groundtruth_boxes'], image_shape)
       groundtruths = {
           'source_id': data['source_id'],
-          'filename_utf8s': data['filename_utf8s'],
+          'filename_utf8s': data['filename_utf8s'].set_shape([10000]),
             # TPU does not support strings :(
           'height': data['height'],
           'width': data['width'],
