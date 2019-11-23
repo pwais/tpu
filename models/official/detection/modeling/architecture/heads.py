@@ -106,6 +106,7 @@ class RpnHead(object):
             features[level], self._anchors_per_location, level)
         scores_outputs[level] = scores_output
         box_outputs[level] = box_output
+    print(scores_outputs, box_outputs)
     return scores_outputs, box_outputs
 
 
@@ -182,6 +183,7 @@ class FastrcnnHead(object):
           kernel_initializer=tf.random_normal_initializer(stddev=0.001),
           bias_initializer=tf.zeros_initializer(),
           name='box-predict')
+      print(class_outputs, box_outputs)
       return class_outputs, box_outputs
 
 
@@ -354,7 +356,7 @@ class FastrcnnCuboidHead(object):
     """
 
     def create_head(name, num_outputs, top_activation=None):
-      head_roi_features = roi_features[name]
+      head_roi_features = tf.cast(roi_features[name], tf.float32)
       # reshape inputs before FC.
       _, num_rois, height, width, filters = (
         head_roi_features.get_shape().as_list())
@@ -380,8 +382,9 @@ class FastrcnnCuboidHead(object):
           self._num_classes * num_outputs,
           kernel_initializer=tf.random_normal_initializer(stddev=0.01),
           bias_initializer=tf.zeros_initializer(),
-          activation=top_activation,
           name='%s-logits' % name)
+      if top_activation:
+        logits = top_activation(logits)
       print(logits) # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
       with tf.name_scope('cuboid_%s_post_processing' % name):
         batch_size, num_cuboids = class_indices.get_shape().as_list()
@@ -637,6 +640,7 @@ class RetinanetHead(object):
       'cuboid_size': create_head('size', 3),
     }
     return name_to_head
+
 
 class ShapemaskPriorHead(object):
   """ShapeMask Prior head."""

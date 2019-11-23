@@ -202,6 +202,9 @@ class MaskrcnnModel(base_model.Model):
           tf.reduce_sum(
             tf.cast(tf.greater(cu_classes, 0), tf.float32)) / 
               tf.cast(tf.math.reduce_prod(tf.shape(cu_classes)), tf.float32))
+        self.add_scalar_summary('cu_classes_num_nonzero', 
+          tf.reduce_sum(
+            tf.cast(tf.greater(cu_classes, 0), tf.float32)))
 
         model_outputs.update({
             'cuboid_targets': fg_cuboids,
