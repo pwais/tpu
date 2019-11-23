@@ -354,7 +354,7 @@ class FastrcnnCuboidHead(object):
     """
 
     def create_head(name, num_outputs, top_activation=None):
-      head_roi_features = roi_features
+      head_roi_features = roi_features[name]
       # reshape inputs before FC.
       _, num_rois, height, width, filters = (
         head_roi_features.get_shape().as_list())
@@ -400,11 +400,11 @@ class FastrcnnCuboidHead(object):
       print(outputs) # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
       return outputs
     
-    def predict_depth(logits):
+    def predict_depth(logit):
       # Following Hu et al., we predict inverse depth.
       # https://github.com/ucbdrive/3d-vehicle-tracking/blob/ce54b2461c8983aef265ed043dec976c6035d431/3d-tracking/utils/network_utils.py#L115
       # (-inf, inf) -> [0, 1]
-      depth_activation = tf.math.sigmoid(logits)
+      depth_activation = tf.math.sigmoid(logit)
       # [0, 1] -> [0, inf)
       return 1. / (depth_activation + 1e-6) - 1. / (1 + 1e-6)
 

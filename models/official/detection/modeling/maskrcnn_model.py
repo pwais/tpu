@@ -153,7 +153,7 @@ class MaskrcnnModel(base_model.Model):
     # Do mask sampling and detections
     if self._include_mask:
       if is_training:
-        rpn_rois, classes, mask_targets = self._sample_masks_fn(
+        mask_rpn_rois, classes, mask_targets = self._sample_masks_fn(
             rpn_rois, matched_gt_boxes, matched_gt_classes, matched_gt_indices,
             labels['gt_masks'])
         mask_targets = tf.stop_gradient(mask_targets)
@@ -166,11 +166,11 @@ class MaskrcnnModel(base_model.Model):
         })
       else:
         # From core detections above
-        rpn_rois = boxes
+        mask_rpn_rois = boxes
         classes = tf.cast(classes, dtype=tf.int32)
 
       mask_roi_features = spatial_transform_ops.multilevel_crop_and_resize(
-          fpn_features, rpn_rois, output_size=14)
+          fpn_features, mask_rpn_rois, output_size=14)
 
       mask_outputs = self._mrcnn_head_fn(
         mask_roi_features, classes, is_training)
@@ -213,9 +213,13 @@ class MaskrcnnModel(base_model.Model):
         cu_classes = tf.cast(classes, dtype=tf.int32)
 
       # cuboid_outputs = self._cuboid_head_fn(roi_features, is_training)
-
-      cu_roi_features = spatial_transform_ops.multilevel_crop_and_resize(
-        fpn_features, cu_rpn_rois, output_size=14)
+      CUBOID_PROPS = ('center', 'depth', 'yaw', 'size')
+      cu_roi_features = dict(
+        (prop_key, 
+         spatial_transform_ops.multilevel_crop_and_resize(
+            fpn_features, cu_rpn_rois, output_size=14))
+        for prop_key in CUBOID_PROPS)
+          # TODO need hardcode keys? ~~~~~~~~~~~~~~~~~~
       cuboid_outputs = self._cuboid_head_fn(
         cu_roi_features, cu_classes, is_training)
       model_outputs.update({
