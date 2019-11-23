@@ -105,6 +105,10 @@ MASKRCNN_CFG.override({
         'num_classes': 91,
         'cuboid_yaw_num_bins': 8,
         'fast_rcnn_mlp_head_dim': 1024,
+        'use_mlp': True,
+        'fully_conv_head_num_convs': 4,
+        'fully_conv_head_num_filters': 256,
+        'fully_conv_head_use_separable_conv': False,
         'use_batch_norm': False,
         'batch_norm': {
             'batch_norm_momentum': 0.997,

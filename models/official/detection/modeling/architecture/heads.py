@@ -315,6 +315,10 @@ class FastrcnnCuboidHead(object):
                num_classes,
                mlp_head_dim,
                cuboid_yaw_num_bins=8,
+               use_mlp=True,
+               fully_conv_head_num_convs=4,
+               fully_conv_head_num_filters=256,
+               fully_conv_head_use_separable_conv=False,
                use_batch_norm=True,
                batch_norm_relu=nn_ops.BatchNormRelu()):
     """Initialize params to build Fast R-CNN cuboid head.
@@ -332,9 +336,149 @@ class FastrcnnCuboidHead(object):
     """
     self._num_classes = num_classes
     self._mlp_head_dim = mlp_head_dim
+    self._use_mlp = use_mlp
+    self._fully_conv_head_num_convs = fully_conv_head_num_convs
+    self._fully_conv_head_num_filters = fully_conv_head_num_filters
+    self._fully_conv_head_use_separable_conv = (
+      fully_conv_head_use_separable_conv)
     self._use_batch_norm = use_batch_norm
     self._cuboid_yaw_num_bins = cuboid_yaw_num_bins
     self._batch_norm_relu = batch_norm_relu
+
+  def create_fully_conv_head(self,
+                             roi_features,
+                             name,
+                             num_outputs,
+                             class_indices,
+                             top_activation=None,
+                             is_training=False):
+    head_roi_features = roi_features[name]
+    _, num_rois, height, width, filters = (
+      head_roi_features.get_shape().as_list())
+    features = tf.reshape(head_roi_features, [-1, height, width, filters])
+    print('features', name, features)
+    
+    use_sep_conv = self._fully_conv_head_use_separable_conv
+    for i in range(self._fully_conv_head_num_convs):
+      if use_sep_conv:
+        conv2d_op = functools.partial(
+            tf.layers.separable_conv2d, depth_multiplier=1)
+      else:
+        conv2d_op = functools.partial(
+            tf.layers.conv2d, kernel_initializer=tf.random_normal_initializer(
+                stddev=0.01))
+      features = conv2d_op(
+          features,
+          self._fully_conv_head_num_filters,
+          kernel_size=(3, 3),
+          activation=(None if self._use_batch_norm else tf.nn.relu),
+          bias_initializer=tf.zeros_initializer(),
+          padding='same',
+          name='cuboid_%s_%s' % (name, i))
+      if self._use_batch_norm:
+        # The convolution layers in the class net are shared among all levels,
+        # but each level has its batch normlization to capture the statistical
+        # difference among different levels.
+        features = self._batch_norm_relu(features, is_training=is_training,
+                                    name='cuboid_%s_%s'% (name, i))
+    if use_sep_conv:
+      conv2d_op = functools.partial(
+          tf.layers.separable_conv2d, depth_multiplier=1)
+    else:
+      conv2d_op = functools.partial(
+          tf.layers.conv2d, kernel_initializer=tf.random_normal_initializer(
+              stddev=1e-5))
+    logits = conv2d_op(
+        features,
+        self._num_classes * num_outputs,
+        kernel_size=(3, 3),
+        bias_initializer=tf.zeros_initializer(),
+        padding='same')
+    if top_activation:
+      logits = top_activation(logits)
+
+    # logits = tf.reshape(
+    #       logits,
+    #       [-1, num_rois, self._mask_target_size, self._mask_target_size,
+    #        self._num_classes])
+
+
+    # b, h, w = logits.get_shape().as_list()[:3]
+    # logits = tf.reshape(
+    #         logits,
+    #         [b, h, w, self._num_classes, num_outputs],
+    #         name='cuboid_%s_predict' % name)
+    print("Cuboid logits: %s %s" % (name, logits))
+    with tf.name_scope('cuboid_%s_post_processing' % name):
+      batch_size, num_cuboids = class_indices.get_shape().as_list()
+      outputs = tf.reshape(
+        logits, [batch_size, num_cuboids, self._num_classes, num_outputs])
+      # Contructs indices for gather.
+      batch_indices = tf.tile(
+          tf.expand_dims(tf.range(batch_size), axis=1), [1, num_cuboids])
+      cuboid_indices = tf.tile(
+          tf.expand_dims(tf.range(num_cuboids), axis=0), [batch_size, 1])
+      gather_indices = tf.stack(
+          [batch_indices, cuboid_indices, class_indices], axis=2)
+      outputs = tf.gather_nd(outputs, gather_indices)
+    outputs = tf.identity(outputs, name='%s-outputs' % name)
+    print(outputs) # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    return head
+
+  def create_mlp_head(self,
+                      roi_features,
+                      name,
+                      num_outputs,
+                      class_indices,
+                      top_activation=None,
+                      is_training=False):
+    head_roi_features = roi_features[name]
+    print('head_roi_features', name, head_roi_features)
+    # reshape inputs before FC.
+    _, num_rois, height, width, filters = (
+      head_roi_features.get_shape().as_list())
+    head_roi_features = tf.reshape(
+        head_roi_features, [-1, num_rois, height * width * filters])
+    net = tf.layers.dense(head_roi_features,
+                          units=self._mlp_head_dim,
+                          activation=(
+                              None if self._use_batch_norm else tf.nn.relu),
+                          name='fc6_%s' % name)
+    if self._use_batch_norm:
+      net = self._batch_norm_relu(net, is_training=is_training)
+    net = tf.layers.dense(net,
+                          units=self._mlp_head_dim,
+                          activation=(
+                              None if self._use_batch_norm else tf.nn.relu),
+                          name='fc7_%s' % name)
+    if self._use_batch_norm:
+      net = self._batch_norm_relu(net, is_training=is_training)
+
+    logits = tf.layers.dense(
+        net,
+        self._num_classes * num_outputs,
+        kernel_initializer=tf.random_normal_initializer(stddev=0.01),
+        bias_initializer=tf.zeros_initializer(),
+        name='%s-logits' % name)
+    if top_activation:
+      logits = top_activation(logits)
+    print(logits) # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    with tf.name_scope('cuboid_%s_post_processing' % name):
+      batch_size, num_cuboids = class_indices.get_shape().as_list()
+      outputs = tf.reshape(
+        logits, [batch_size, num_cuboids, self._num_classes, num_outputs])
+      # mask_outputs = tf.transpose(mask_outputs, [0, 1, 4, 2, 3])
+      # Contructs indices for gather.
+      batch_indices = tf.tile(
+          tf.expand_dims(tf.range(batch_size), axis=1), [1, num_cuboids])
+      cuboid_indices = tf.tile(
+          tf.expand_dims(tf.range(num_cuboids), axis=0), [batch_size, 1])
+      gather_indices = tf.stack(
+          [batch_indices, cuboid_indices, class_indices], axis=2)
+      outputs = tf.gather_nd(outputs, gather_indices)
+    outputs = tf.identity(outputs, name='%s-outputs' % name)
+    print(outputs) # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    return outputs
 
   def __call__(self,
                roi_features,
@@ -354,55 +498,6 @@ class FastrcnnCuboidHead(object):
         [batch_size, num_rois, size], where size is the size of the
         cuboid (sub) head.
     """
-
-    def create_head(name, num_outputs, top_activation=None):
-      head_roi_features = roi_features[name]
-      print('head_roi_features', name, head_roi_features)
-      # reshape inputs before FC.
-      _, num_rois, height, width, filters = (
-        head_roi_features.get_shape().as_list())
-      head_roi_features = tf.reshape(
-          head_roi_features, [-1, num_rois, height * width * filters])
-      net = tf.layers.dense(head_roi_features,
-                            units=self._mlp_head_dim,
-                            activation=(
-                                None if self._use_batch_norm else tf.nn.relu),
-                            name='fc6_%s' % name)
-      if self._use_batch_norm:
-        net = self._batch_norm_relu(net, is_training=is_training)
-      net = tf.layers.dense(net,
-                            units=self._mlp_head_dim,
-                            activation=(
-                                None if self._use_batch_norm else tf.nn.relu),
-                            name='fc7_%s' % name)
-      if self._use_batch_norm:
-        net = self._batch_norm_relu(net, is_training=is_training)
-
-      logits = tf.layers.dense(
-          net,
-          self._num_classes * num_outputs,
-          kernel_initializer=tf.random_normal_initializer(stddev=0.01),
-          bias_initializer=tf.zeros_initializer(),
-          name='%s-logits' % name)
-      if top_activation:
-        logits = top_activation(logits)
-      print(logits) # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-      with tf.name_scope('cuboid_%s_post_processing' % name):
-        batch_size, num_cuboids = class_indices.get_shape().as_list()
-        outputs = tf.reshape(
-          logits, [batch_size, num_cuboids, self._num_classes, num_outputs])
-        # mask_outputs = tf.transpose(mask_outputs, [0, 1, 4, 2, 3])
-        # Contructs indices for gather.
-        batch_indices = tf.tile(
-            tf.expand_dims(tf.range(batch_size), axis=1), [1, num_cuboids])
-        cuboid_indices = tf.tile(
-            tf.expand_dims(tf.range(num_cuboids), axis=0), [batch_size, 1])
-        gather_indices = tf.stack(
-            [batch_indices, cuboid_indices, class_indices], axis=2)
-        outputs = tf.gather_nd(outputs, gather_indices)
-      outputs = tf.identity(outputs, name='%s-outputs' % name)
-      print(outputs) # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-      return outputs
     
     def predict_depth(logit):
       # Following Hu et al., we predict inverse depth.
@@ -412,6 +507,16 @@ class FastrcnnCuboidHead(object):
       # [0, 1] -> [0, inf)
       return 1. / (depth_activation + 1e-6) - 1. / (1 + 1e-6)
 
+    def create_head(name, num_outputs, top_activation=None):
+      if self._use_mlp:
+        return self.create_mlp_head(
+          roi_features, name, num_outputs, class_indices,
+          top_activation=top_activation, is_training=is_training)
+      else:
+        return self.create_mlp_head(
+          roi_features, name, num_outputs, class_indices,
+          top_activation=top_activation, is_training=is_training)
+    
     name_to_head = {
       'cuboid_center': create_head('center', 2),
       'cuboid_depth': create_head('depth', 1, top_activation=predict_depth),
@@ -623,7 +728,7 @@ class RetinanetHead(object):
               head,
               [b, h, w, self._anchors_per_location, num_outputs],
               name='cuboid_%s_predict_%s' % (name, level))
-      tf.logging.info("Cuboid head: %s" % head)
+      print("Cuboid head: %s" % head)
       return head
     
     def predict_depth(logits):

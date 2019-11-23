@@ -133,6 +133,11 @@ def fast_rcnn_cuboid_head_generator(params):
     params.num_classes,
     params.fast_rcnn_mlp_head_dim,
     cuboid_yaw_num_bins=params.cuboid_yaw_num_bins,
+    use_mlp=params.use_mlp,
+    fully_conv_head_num_convs=params.fully_conv_head_num_convs,
+    fully_conv_head_num_filters=params.fully_conv_head_num_filters,
+    fully_conv_head_use_separable_conv=
+        params.fully_conv_head_use_separable_conv,
     use_batch_norm=params.use_batch_norm,
     batch_norm_relu=batch_norm_relu_generator(
         params.batch_norm))
