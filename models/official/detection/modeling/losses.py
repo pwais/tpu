@@ -435,6 +435,11 @@ class FastrcnnCuboidLoss(object):
   def depth_loss(self, cuboid_outputs, cuboid_targets, selected_class_targets):
     pred_depth = cuboid_outputs['cuboid_depth']
     label_depth = cuboid_targets['cuboid/box/center_depth']
+    
+    # FIXME? do we have depths that are 0-ish or less? ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    label_depth = tf.where(
+      tf.greater(label_depth, 1), label_depth, tf.ones_like(label_depth))
+    
     mask = FastrcnnCuboidLoss._loss_mask(
               cuboid_outputs['cuboid_depth'], selected_class_targets)
     return self._regression_loss(pred_depth, label_depth, mask)
