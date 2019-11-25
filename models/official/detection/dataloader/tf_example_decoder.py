@@ -33,9 +33,11 @@ class TfExampleDecoder(object):
   def __init__(self,
                include_mask=False,
                regenerate_source_id=False,
-               include_cuboids=False):
+               include_cuboids=False,
+               include_rv=None):
     self._include_mask = include_mask
     self._include_cuboids = include_cuboids
+    self._include_rv = include_rv or []
     self._regenerate_source_id = regenerate_source_id
     self._keys_to_features = {
         'image/encoded': tf.FixedLenFeature((), tf.string),
@@ -73,6 +75,14 @@ class TfExampleDecoder(object):
           'image/object/cuboid/box/center_depth': tf.VarLenFeature(tf.float32),
           'image/object/cuboid/box/perspective_yaw':
               tf.VarLenFeature(tf.float32),
+      })
+    for img_type in self._include_rv:
+      self._keys_to_features.update({
+        'rv_image/%s/height' % img_type: tf.FixedLenFeature((), tf.int64),
+        'rv_image/%s/width' % img_type: tf.FixedLenFeature((), tf.int64),
+        'rv_image/%s/channels' % img_type: tf.FixedLenFeature((), tf.int64),
+        'rv_image/%s/encoded' % img_type: tf.FixedLenFeature((), tf.string),
+        'rv_image/%s/format' % img_type: tf.FixedLenFeature((), tf.string),
       })
 
   def _decode_image(self, parsed_tensors):
@@ -217,5 +227,26 @@ class TfExampleDecoder(object):
         PREFIX = 'image/object/'
         tensor_key = key[len(PREFIX):]
         decoded_tensors[tensor_key] = parsed_tensors[key]
+    if self._include_rv:
+      for img_type in self._include_rv:
+        # Grab the image, which might be a JPEG or PNG
+        # (which might have only one useful channel)
+        rv_image = tf.io.decode_image(
+                      parsed_tensors['rv_image/%s/encoded' % img_type],
+                      channels=3)
+        rv_image.set_shape([None, None, 3])
+        decoded_tensors.update({
+          'rv_image/%s/image' % img_type: rv_image,
+        })
+
+        # Unlike above, we *require* rv image dimensions to be set, so we
+        # can just copy them.
+        COPY_KEYS = (
+          'rv_image/%s/height' % img_type,
+          'rv_image/%s/width' % img_type,
+          'rv_image/%s/channels' % img_type,
+        )
+        for key in COPY_KEYS:
+          decoded_tensors[key] = parsed_tensors[key]
 
     return decoded_tensors

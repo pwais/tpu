@@ -45,6 +45,7 @@ class Parser(object):
                max_num_instances=100,
                include_mask=False,
                include_cuboids=False,
+               rv_images=None,
                mask_crop_size=112,
                use_bfloat16=True,
                mode=None):
@@ -80,6 +81,8 @@ class Parser(object):
         image. The groundtruth data will be padded to `max_num_instances`.
       include_mask: a bool to indicate whether parse mask groundtruth.
       include_cuboids: a bool to indicate whether to parse cuboid groundtruth
+      rv_images: list of string; include the Range View Images with these
+        keys.
       mask_crop_size: the size which groundtruth mask is cropped to.
       use_bfloat16: `bool`, if True, cast output image to tf.bfloat16.
       mode: a ModeKeys. Specifies if this is training, evaluation, prediction
@@ -120,6 +123,9 @@ class Parser(object):
     # Cuboid
     self._include_cuboids = include_cuboids
 
+    # Range Value Images
+    self._rv_images = rv_images or []
+
     # Device.
     self._use_bfloat16 = use_bfloat16
 
@@ -140,7 +146,7 @@ class Parser(object):
       value: a string tensor holding a serialized tf.Example proto.
 
     Returns:
-      image, labels: if mode == ModeKeys.TRAIN. see _parse_train_data.
+      features, labels: if mode == ModeKeys.TRAIN. see _parse_train_data.
       {'images': image, 'labels': labels}: if mode == ModeKeys.PREDICT
         or ModeKeys.PREDICT_WITH_GT.
     """
@@ -189,8 +195,11 @@ class Parser(object):
       data: the decoded tensor dictionary from TfExampleDecoder.
 
     Returns:
-      image: image tensor that is preproessed to have normalized value and
-        dimension [output_size[0], output_size[1], 3]
+      features: a dictionary of tensors:
+        image: image tensor that is preprocessed to have normalized value and
+          dimension [output_size[0], output_size[1], 3]
+        rv_images: a dictionary of Range View Image type -> tensor with
+          dimensions [output_size[0], output_size[1], 3]
       labels: a dictionary of tensors used for training. The following describes
         {key: value} pairs in the dictionary.
         image_info: a 2D `Tensor` that encodes the information of the image and
@@ -244,8 +253,13 @@ class Parser(object):
     # Normalizes image with mean and std pixel values.
     image = input_utils.normalize_image(image)
 
+    rv_images = {}
+    for key in self._rv_images:
+      rv_images[key] = data['rv_image/%s/image' % key]
+
     # Flips image randomly during training.
     if self._aug_rand_hflip:
+      assert not (self._rv_images or self._include_cuboids), "Unsupported"
       if self._include_mask:
         image, boxes, masks = input_utils.random_horizontal_flip(
             image, boxes, masks)
@@ -266,6 +280,17 @@ class Parser(object):
         aug_scale_min=self._aug_scale_min,
         aug_scale_max=self._aug_scale_max)
     image_height, image_width, _ = image.get_shape().as_list()
+    
+    # Resizes and crops RV Images.
+    for key, rv_image in rv_images.items():
+      rv_image, _ = input_utils.resize_and_crop_image(
+        rv_image,
+        self._output_size,
+        padded_size=input_utils.compute_padded_size(
+            self._output_size, 2 ** self._max_level),
+        aug_scale_min=self._aug_scale_min,
+        aug_scale_max=self._aug_scale_max)
+      rv_images[key] = rv_image
 
     # Resizes and crops boxes.
     # Now the coordinates of boxes are w.r.t the scaled image.
@@ -317,6 +342,10 @@ class Parser(object):
     if self._use_bfloat16:
       image = tf.cast(image, dtype=tf.bfloat16)
 
+      rv_images = dict(
+        (key, tf.cast(rv_image, dtype=tf.bfloat16))
+        for key, rv_image in rv_images.items())
+
     # Packs labels for model_fn outputs.
     labels = {
         'anchor_boxes': input_anchor.multilevel_boxes,
@@ -334,7 +363,7 @@ class Parser(object):
     if self._include_cuboids:
       labels['cuboid_targets'] = self.__get_cuboid_targets(data, indices)
 
-    return image, labels
+    return {'image': image, 'rv_images': rv_images}, labels
 
   def _parse_eval_data(self, data):
     """Parses data for evaluation."""
@@ -366,6 +395,10 @@ class Parser(object):
     image = data['image']
     image_shape = tf.shape(image)[0:2]
 
+    rv_images = {}
+    for key in self._rv_images:
+      rv_images[key] = data['rv_image/%s/image' % key]
+
     # Normalizes image with mean and std pixel values.
     image = input_utils.normalize_image(image)
 
@@ -379,9 +412,24 @@ class Parser(object):
         aug_scale_max=1.0)
     image_height, image_width, _ = image.get_shape().as_list()
 
+    # Resizes and crops RV Images.
+    for key, rv_image in rv_images.items():
+      rv_image, _ = input_utils.resize_and_crop_image(
+        rv_image,
+        self._output_size,
+        padded_size=input_utils.compute_padded_size(
+            self._output_size, 2 ** self._max_level),
+        aug_scale_min=self._aug_scale_min,
+        aug_scale_max=self._aug_scale_max)
+      rv_images[key] = rv_image
+
     # If bfloat16 is used, casts input image to tf.bfloat16.
     if self._use_bfloat16:
       image = tf.cast(image, dtype=tf.bfloat16)
+
+      rv_images = dict(
+        (key, tf.cast(rv_image, dtype=tf.bfloat16))
+        for key, rv_image in rv_images.items())
 
     # Compute Anchor boxes.
     input_anchor = anchor.Anchor(
@@ -431,5 +479,6 @@ class Parser(object):
 
     return {
         'images': image,
+        'rv_images': rv_images,
         'labels': labels,
     }

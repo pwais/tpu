@@ -52,6 +52,7 @@ class Parser(object):
                use_bfloat16=True,
                regenerate_source_id=False,
                include_cuboids=False,
+               rv_images=None,
                mode=None):
     """Initializes parameters for parsing annotations in the dataset.
 
@@ -93,6 +94,8 @@ class Parser(object):
       regenerate_source_id: `bool`, if True TFExampleParser will use hashed
         value of `image/encoded` for `image/source_id`.
       include_cuboids: `bool`, if True, load cuboid groundtruths
+      rv_images: `list` of `string`, if non-Falsey, parse and
+        include these Range View Images as features.
       mode: a ModeKeys. Specifies if this is training, evaluation, prediction or
         prediction with groundtruths in the outputs.
     """
@@ -101,6 +104,7 @@ class Parser(object):
     self._skip_crowd_during_training = skip_crowd_during_training
     self._is_training = (mode == ModeKeys.TRAIN)
     self._include_cuboids = include_cuboids
+    self._rv_images = rv_images or []
 
     self._example_decoder = tf_example_decoder.TfExampleDecoder(
         include_mask=False,
@@ -146,8 +150,11 @@ class Parser(object):
       value: a string tensor holding a serialized tf.Example proto.
 
     Returns:
-      image: image tensor that is preproessed to have normalized value and
-        dimension [output_size[0], output_size[1], 3]
+      features: a dictionary of tensors:
+        images: image tensor that is preprocessed to have normalized value and
+          dimension [output_size[0], output_size[1], 3]
+        rv_images: a dictionary of Range View Image type -> tensor with
+          dimensions [output_size[0], output_size[1], 3]
       labels:
         cls_targets: ordered dictionary with keys
           [min_level, min_level+1, ..., max_level]. The values are tensor with
@@ -242,6 +249,10 @@ class Parser(object):
     # Gets original image and its size.
     image = data['image']
 
+    rv_images = {}
+    for key in self._rv_images:
+      rv_images[key] = data['rv_image/%s/image' % key]
+
     # NOTE: The autoaugment method works best when used alongside the standard
     # horizontal flipping of images along with size jittering and normalization.
     if self._use_autoaugment:
@@ -250,6 +261,8 @@ class Parser(object):
       except ImportError as e:
         logging.exception('Autoaugment is not supported in TF 2.x.')
         raise e
+
+      assert not (self._rv_images or self._include_cuboids), "Unsupported"
 
       image, boxes = autoaugment_utils.distort_image_with_autoaugment(
           image, boxes, self._autoaugment_policy_name)
@@ -276,6 +289,17 @@ class Parser(object):
         aug_scale_min=self._aug_scale_min,
         aug_scale_max=self._aug_scale_max)
     image_height, image_width, _ = image.get_shape().as_list()
+
+    # Resizes and crops RV Images.
+    for key, rv_image in rv_images.items():
+      rv_image, _ = input_utils.resize_and_crop_image(
+        rv_image,
+        self._output_size,
+        padded_size=input_utils.compute_padded_size(
+            self._output_size, 2 ** self._max_level),
+        aug_scale_min=self._aug_scale_min,
+        aug_scale_max=self._aug_scale_max)
+      rv_images[key] = rv_image
 
     # Resizes and crops boxes.
     # Now the coordinates of boxes are w.r.t the scaled image.
@@ -307,6 +331,10 @@ class Parser(object):
     # If bfloat16 is used, casts input image to tf.bfloat16.
     if self._use_bfloat16:
       image = tf.cast(image, dtype=tf.bfloat16)
+
+      rv_images = dict(
+        (key, tf.cast(rv_image, dtype=tf.bfloat16))
+        for key, rv_image in rv_images.items())
     
     # Packs labels for model_fn outputs.
     labels = {
@@ -321,7 +349,7 @@ class Parser(object):
       labels['cuboid_targets'] = self.__get_cuboid_targets(
                                         data, anchor_labeler, boxes, indices)
 
-    return image, labels
+    return {'images': image, 'rv_images': rv_images}, labels
 
   def _parse_eval_data(self, data):
     """Parses data for training and evaluation."""
@@ -332,6 +360,10 @@ class Parser(object):
     # Gets original image and its size.
     image = data['image']
     image_shape = tf.shape(image)[0:2]
+
+    rv_images = {}
+    for key in self._rv_images:
+      rv_images[key] = data['rv_image/%s/image' % key]
 
     # Normalizes image with mean and std pixel values.
     image = input_utils.normalize_image(image)
@@ -348,6 +380,17 @@ class Parser(object):
         aug_scale_min=1.0,
         aug_scale_max=1.0)
     image_height, image_width, _ = image.get_shape().as_list()
+
+    # Resizes and crops RV Images.
+    for key, rv_image in rv_images.items():
+      rv_image, _ = input_utils.resize_and_crop_image(
+        rv_image,
+        self._output_size,
+        padded_size=input_utils.compute_padded_size(
+            self._output_size, 2 ** self._max_level),
+        aug_scale_min=self._aug_scale_min,
+        aug_scale_max=self._aug_scale_max)
+      rv_images[key] = rv_image
 
     # Resizes and crops boxes.
     image_scale = image_info[2, :]
@@ -375,6 +418,10 @@ class Parser(object):
     # If bfloat16 is used, casts input image to tf.bfloat16.
     if self._use_bfloat16:
       image = tf.cast(image, dtype=tf.bfloat16)
+
+      rv_images = dict(
+        (key, tf.cast(rv_image, dtype=tf.bfloat16))
+        for key, rv_image in rv_images.items())
 
     # Sets up groundtruth data for evaluation.
     groundtruths = {
@@ -410,13 +457,17 @@ class Parser(object):
       labels['cuboid_targets'] = self.__get_cuboid_targets(
                                         data, anchor_labeler, boxes, indices)
 
-    return image, labels
+    return {'images': image, 'rv_images': rv_images}, labels
 
   def _parse_predict_data(self, data):
     """Parses data for prediction."""
     # Gets original image and its size.
     image = data['image']
     image_shape = tf.shape(image)[0:2]
+
+    rv_images = {}
+    for key in self._rv_images:
+      rv_images[key] = data['rv_image/%s/image' % key]
 
     # Normalizes image with mean and std pixel values.
     image = input_utils.normalize_image(image)
@@ -431,9 +482,24 @@ class Parser(object):
         aug_scale_max=1.0)
     image_height, image_width, _ = image.get_shape().as_list()
 
+    # Resizes and crops RV Images.
+    for key, rv_image in rv_images.items():
+      rv_image, _ = input_utils.resize_and_crop_image(
+        rv_image,
+        self._output_size,
+        padded_size=input_utils.compute_padded_size(
+            self._output_size, 2 ** self._max_level),
+        aug_scale_min=self._aug_scale_min,
+        aug_scale_max=self._aug_scale_max)
+      rv_images[key] = rv_image
+
     # If bfloat16 is used, casts input image to tf.bfloat16.
     if self._use_bfloat16:
       image = tf.cast(image, dtype=tf.bfloat16)
+
+      rv_images = dict(
+        (key, tf.cast(rv_image, dtype=tf.bfloat16))
+        for key, rv_image in rv_images.items())
 
     # Compute Anchor boxes.
     input_anchor = anchor.Anchor(
@@ -501,5 +567,6 @@ class Parser(object):
                                         data, anchor_labeler, boxes, indices)
     return {
         'images': image,
+        'rv_images': rv_images,
         'labels': labels,
     }

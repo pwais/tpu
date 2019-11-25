@@ -126,7 +126,7 @@ def resize_and_crop_image(image,
   2. Pad the rescaled image to the padded_size.
 
   Args:
-    image: a `Tensor` of shape [height, width, 3] representing an image.
+    image: a `Tensor` of shape [height, width, channels] representing an image.
     desired_size: a `Tensor` or `int` list/tuple of two elements representing
       [height, width] of the desired actual output image size.
     padded_size: a `Tensor` or `int` list/tuple of two elements representing
