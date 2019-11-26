@@ -196,7 +196,7 @@ class Parser(object):
 
     Returns:
       features: a dictionary of tensors:
-        image: image tensor that is preprocessed to have normalized value and
+        images: image tensor that is preprocessed to have normalized value and
           dimension [output_size[0], output_size[1], 3]
         rv_images: a dictionary of Range View Image type -> tensor with
           dimensions [output_size[0], output_size[1], 3]
@@ -363,7 +363,7 @@ class Parser(object):
     if self._include_cuboids:
       labels['cuboid_targets'] = self.__get_cuboid_targets(data, indices)
 
-    return {'image': image, 'rv_images': rv_images}, labels
+    return {'images': image, 'rv_images': rv_images}, labels
 
   def _parse_eval_data(self, data):
     """Parses data for evaluation."""

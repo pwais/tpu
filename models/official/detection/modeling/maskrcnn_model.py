@@ -79,7 +79,7 @@ class MaskrcnnModel(base_model.Model):
     is_training = mode == mode_keys.TRAIN
     model_outputs = {}
 
-    backbone_features = self._backbone_fn(features, is_training)
+    backbone_features = self._backbone_fn(features['images'], is_training)
     fpn_features = self._fpn_fn(backbone_features, is_training)
 
     # Print number of parameters and FLOPS in model.
@@ -267,7 +267,7 @@ class MaskrcnnModel(base_model.Model):
     # If the input image is transposed (from NHWC to HWCN), we need to revert it
     # back to the original shape before it's used in the computation.
     if self._transpose_input:
-      features = tf.transpose(features, [3, 0, 1, 2])
+      features['images'] = tf.transpose(features['images'], [3, 0, 1, 2])
 
     outputs = self.model_outputs(features, labels, mode=mode_keys.TRAIN)
     losses = self._build_losses(features, labels, outputs)
@@ -339,7 +339,7 @@ class MaskrcnnModel(base_model.Model):
     labels = features['labels']
 
     outputs = self.model_outputs(
-        images, labels=labels, mode=mode_keys.PREDICT)
+        features, labels=labels, mode=mode_keys.PREDICT)
 
     predictions = {
         'pred_image_info': labels['image_info'],

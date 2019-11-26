@@ -517,7 +517,7 @@ class FastrcnnCuboidHead(object):
           roi_features, name, num_outputs, class_indices,
           top_activation=top_activation, is_training=is_training)
       else:
-        return self.create_mlp_head(
+        return self.create_fully_conv_head(
           roi_features, name, num_outputs, class_indices,
           top_activation=top_activation, is_training=is_training)
     

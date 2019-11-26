@@ -63,9 +63,9 @@ class RetinanetModel(base_model.Model):
 
     self._transpose_input = params.train.transpose_input
 
-  def build_outputs(self, images, labels, mode):
+  def build_outputs(self, features, labels, mode):
     backbone_features = self._backbone_fn(
-        images, is_training=(mode == mode_keys.TRAIN))
+        features['images'], is_training=(mode == mode_keys.TRAIN))
     fpn_features = self._fpn_fn(
         backbone_features, is_training=(mode == mode_keys.TRAIN))
     cls_outputs, box_outputs, cuboid_outputs = self._head_fn(
@@ -99,9 +99,9 @@ class RetinanetModel(base_model.Model):
     # If the input image is transposed (from NHWC to HWCN), we need to revert it
     # back to the original shape before it's used in the computation.
     if self._transpose_input:
-      images = tf.transpose(features['images'], [3, 0, 1, 2])
+      features['images'] = tf.transpose(features['images'], [3, 0, 1, 2])
 
-    outputs = self.model_outputs(images, labels, mode=mode_keys.TRAIN)
+    outputs = self.model_outputs(features, labels, mode=mode_keys.TRAIN)
 
     # Adds RetinaNet model losses.
     cls_loss = self._cls_loss_fn(
@@ -158,7 +158,7 @@ class RetinanetModel(base_model.Model):
     labels = features['labels']
 
     outputs = self.model_outputs(
-        images, labels=labels, mode=mode_keys.PREDICT)
+        features, labels=labels, mode=mode_keys.PREDICT)
 
     predictions = {
         'images': images,
