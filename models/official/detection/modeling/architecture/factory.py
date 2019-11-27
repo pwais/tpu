@@ -57,7 +57,7 @@ def backbone_generator(params):
 
 def rv_backbone_generator(params):
   """Generator function for various backbone models for RV Image features."""
-  if params.architecture.rv_backbone.backbone == 'resnet':
+  if params.architecture.rv_backbone == 'resnet':
     resnet_params = params.rv_backbone.resnet
     backbone_fn = resnet.Resnet(
         resnet_depth=resnet_params.resnet_depth,

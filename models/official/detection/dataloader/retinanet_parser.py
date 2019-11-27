@@ -109,7 +109,8 @@ class Parser(object):
     self._example_decoder = tf_example_decoder.TfExampleDecoder(
         include_mask=False,
         regenerate_source_id=regenerate_source_id,
-        include_cuboids=include_cuboids)
+        include_cuboids=include_cuboids,
+        rv_images=rv_images)
 
     # Anchor.
     self._output_size = output_size

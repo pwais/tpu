@@ -34,10 +34,10 @@ class TfExampleDecoder(object):
                include_mask=False,
                regenerate_source_id=False,
                include_cuboids=False,
-               include_rv=None):
+               rv_images=None):
     self._include_mask = include_mask
     self._include_cuboids = include_cuboids
-    self._include_rv = include_rv or []
+    self._rv_images = rv_images or []
     self._regenerate_source_id = regenerate_source_id
     self._keys_to_features = {
         'image/encoded': tf.FixedLenFeature((), tf.string),
@@ -76,7 +76,7 @@ class TfExampleDecoder(object):
           'image/object/cuboid/box/perspective_yaw':
               tf.VarLenFeature(tf.float32),
       })
-    for img_type in self._include_rv:
+    for img_type in self._rv_images:
       self._keys_to_features.update({
         'rv_image/%s/height' % img_type: tf.FixedLenFeature((), tf.int64),
         'rv_image/%s/width' % img_type: tf.FixedLenFeature((), tf.int64),
@@ -227,26 +227,44 @@ class TfExampleDecoder(object):
         PREFIX = 'image/object/'
         tensor_key = key[len(PREFIX):]
         decoded_tensors[tensor_key] = parsed_tensors[key]
-    if self._include_rv:
-      for img_type in self._include_rv:
+    if self._rv_images:
+      for img_type in self._rv_images:
         # Grab the image, which might be a JPEG or PNG
         # (which might have only one useful channel)
         rv_image = tf.io.decode_image(
                       parsed_tensors['rv_image/%s/encoded' % img_type],
-                      channels=3)
-        rv_image.set_shape([None, None, 3])
+                      channels=3) # decode_image API says always 3 chan ...
+
+        # FIXME: Sadly, TPUs require static tensor sizes, and Tensorflow 1.x 
+        # gives us no facility to read the `/channels` property to discern
+        # the number of channels in the RV Image.  (Image height and width
+        # get statically determined thru the image resize / normalization
+        # portion of the pipeline).  As a workaround, we'll hardcode known
+        # channel counts here and default to 3 channels
+        # otherwise.
+        KNOWN_RV_IMG_TYPE_TO_NCHAN = {
+          'depth_delaunay_smoothed': 3,
+          'depth_smoothed': 1,
+          'depth': 1,
+          'height_smoothed': 1,
+          'height': 1,
+        }
+        n_chan = KNOWN_RV_IMG_TYPE_TO_NCHAN.get(img_type, 3)
+        rv_image = rv_image[:, :, :n_chan]
+        rv_image.set_shape([None, None, n_chan])
         decoded_tensors.update({
           'rv_image/%s/image' % img_type: rv_image,
         })
 
-        # Unlike above, we *require* rv image dimensions to be set, so we
-        # can just copy them.
-        COPY_KEYS = (
-          'rv_image/%s/height' % img_type,
-          'rv_image/%s/width' % img_type,
-          'rv_image/%s/channels' % img_type,
-        )
-        for key in COPY_KEYS:
-          decoded_tensors[key] = parsed_tensors[key]
+        # TODO: currently unused fields below
+        # # Unlike above, we *require* rv image dimensions to be set, so we
+        # # can just copy them.  These fields may not be used by the model.
+        # COPY_KEYS = (
+        #   'rv_image/%s/height' % img_type,
+        #   'rv_image/%s/width' % img_type,
+        #   'rv_image/%s/channels' % img_type,
+        # )
+        # for key in COPY_KEYS:
+        #   decoded_tensors[key] = parsed_tensors[key]
 
     return decoded_tensors

@@ -49,7 +49,7 @@ class RetinanetModel(base_model.Model):
     self._rv_backbone_fn = None
     self._rv_fusion = None
     if params.architecture.rv_backbone:
-      self._rv_backbone_fn = factory.backbone_generator(params)
+      self._rv_backbone_fn = factory.rv_backbone_generator(params)
       self._rv_fusion = RVFusion(params.architecture.rv_fusion)
 
     # Loss function.
@@ -71,19 +71,24 @@ class RetinanetModel(base_model.Model):
     self._transpose_input = params.train.transpose_input
 
   def build_outputs(self, features, labels, mode):
+    import pprint # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     is_training = (mode == mode_keys.TRAIN)
     backbone_features = self._backbone_fn(
       features['images'], is_training=is_training)
+    pprint.pprint(('backbone_features', backbone_features))
     
     if self._rv_backbone_fn is not None:
-      rv_image_fused = tf.concat(features['rv_images'].values(), axis=-1)
-      rv_backbone_features = self._rv_backbone_fn(
-        rv_image_fused, is_training=is_training)
+      rv_image_fused = tf.concat(list(features['rv_images'].values()), axis=-1)
+      with tf.variable_scope('rv'):
+        rv_backbone_features = self._rv_backbone_fn(
+          rv_image_fused, is_training=is_training)
+        pprint.pprint(('rv_backbone_features', rv_backbone_features))
       backbone_features = self._rv_fusion(
         backbone_features, rv_backbone_features)
-
+    
     fpn_features = self._fpn_fn(
         backbone_features, is_training=(mode == mode_keys.TRAIN))
+    pprint.pprint(('fpn_features', fpn_features))
     
     cls_outputs, box_outputs, cuboid_outputs = self._head_fn(
         fpn_features, is_training=(mode == mode_keys.TRAIN))

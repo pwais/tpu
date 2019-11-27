@@ -47,7 +47,8 @@ def parser_generator(params, mode):
         use_bfloat16=parser_params.use_bfloat16,
         mode=mode,
         regenerate_source_id=parser_params.regenerate_source_id,
-        include_cuboids=parser_params.include_cuboids)
+        include_cuboids=parser_params.include_cuboids,
+        rv_images=parser_params.rv_images)
   elif params.architecture.parser == 'maskrcnn_parser':
     anchor_params = params.anchor
     parser_params = params.maskrcnn_parser
@@ -69,6 +70,7 @@ def parser_generator(params, mode):
         max_num_instances=parser_params.max_num_instances,
         include_mask=parser_params.include_mask,
         include_cuboids=parser_params.include_cuboids,
+        rv_images=parser_params.rv_images,
         mask_crop_size=parser_params.mask_crop_size,
         use_bfloat16=parser_params.use_bfloat16,
         mode=mode)
