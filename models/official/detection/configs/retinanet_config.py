@@ -26,6 +26,10 @@ RETINANET_CFG.override({
         'backbone': 'resnet',
         'multilevel_features': 'fpn',
         'use_bfloat16': True,
+        'rv_backbone': '',
+        'rv_fusion': {
+            'strategy': 'concat',
+        }
     },
     'retinanet_parser': {
         'use_bfloat16': True,
@@ -41,6 +45,7 @@ RETINANET_CFG.override({
         'max_num_instances': 100,
         'regenerate_source_id': False,
         'include_cuboids': False,
+        'rv_images': [],
     },
     'retinanet_head': {
         'min_level': 3,

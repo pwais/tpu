@@ -353,10 +353,16 @@ class FastrcnnCuboidHead(object):
                              top_activation=None,
                              is_training=False):
     head_roi_features = roi_features[name]
+    batch_size, num_cuboids = class_indices.get_shape().as_list()
+    print('head_roi_features', name, head_roi_features)
+
+    # Need to merge batch and ROI dimensions for conv op below, then
+    # we'll un-merge them before predicting.
     _, num_rois, height, width, filters = (
       head_roi_features.get_shape().as_list())
-    features = tf.reshape(head_roi_features, [-1, height, width, filters])
-    print('features', name, features)
+    assert num_rois == num_cuboids
+    features = tf.reshape(
+      head_roi_features, [batch_size * num_rois, height, width, filters])
     
     use_sep_conv = self._fully_conv_head_use_separable_conv
     for i in range(self._fully_conv_head_num_convs):
@@ -381,22 +387,28 @@ class FastrcnnCuboidHead(object):
         # difference among different levels.
         features = self._batch_norm_relu(features, is_training=is_training,
                                     name='cuboid_%s_%s'% (name, i))
-    if use_sep_conv:
-      conv2d_op = functools.partial(
-          tf.layers.separable_conv2d, depth_multiplier=1)
-    else:
-      conv2d_op = functools.partial(
-          tf.layers.conv2d, kernel_initializer=tf.random_normal_initializer(
-              stddev=1e-5))
-    logits = conv2d_op(
-        features,
+    # if use_sep_conv:
+    #   conv2d_op = functools.partial(
+    #       tf.layers.separable_conv2d, depth_multiplier=1)
+    # else:
+    #   conv2d_op = functools.partial(
+    #       tf.layers.conv2d, kernel_initializer=tf.random_normal_initializer(
+    #           stddev=1e-5))
+    pooled = tf.keras.layers.GlobalAveragePooling2D(name='pool')(features)
+    logits = tf.layers.dense(
+        pooled,
         self._num_classes * num_outputs,
-        kernel_size=(3, 3),
+        kernel_initializer=tf.random_normal_initializer(stddev=0.01),
         bias_initializer=tf.zeros_initializer(),
-        padding='same')
+        name='%s-logits' % name)
+    # logits = conv2d_op(
+    #     features,
+    #     self._num_classes * num_outputs,
+    #     kernel_size=(3, 3),
+    #     bias_initializer=tf.zeros_initializer(),
+    #     padding='same')
     if top_activation:
       logits = top_activation(logits)
-
     # logits = tf.reshape(
     #       logits,
     #       [-1, num_rois, self._mask_target_size, self._mask_target_size,
@@ -410,19 +422,23 @@ class FastrcnnCuboidHead(object):
     #         name='cuboid_%s_predict' % name)
     print("Cuboid logits: %s %s" % (name, logits))
     with tf.name_scope('cuboid_%s_post_processing' % name):
-      batch_size, num_cuboids = class_indices.get_shape().as_list()
+      # First, un-merge batch and ROI
       outputs = tf.reshape(
-        logits, [batch_size, num_cuboids, self._num_classes, num_outputs])
-      # Contructs indices for gather.
+        logits,
+        [batch_size, num_rois, self._num_classes, num_outputs])
+
+      # Now, pull out class-specific outputs.
+      # First contruct indices for gather.
       batch_indices = tf.tile(
           tf.expand_dims(tf.range(batch_size), axis=1), [1, num_cuboids])
       cuboid_indices = tf.tile(
           tf.expand_dims(tf.range(num_cuboids), axis=0), [batch_size, 1])
       gather_indices = tf.stack(
           [batch_indices, cuboid_indices, class_indices], axis=2)
+      
       outputs = tf.gather_nd(outputs, gather_indices)
-    outputs = tf.identity(outputs, name='%s-outputs' % name)
-    print(outputs) # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    head = tf.identity(outputs, name='%s-head' % name)
+    print(head) # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     return head
 
   def create_mlp_head(self,
@@ -433,6 +449,10 @@ class FastrcnnCuboidHead(object):
                       top_activation=None,
                       is_training=False):
     head_roi_features = roi_features[name]
+    
+    # NB: bfloat16 here diverges / is unstable (for at least depth)
+    head_roi_features = tf.cast(head_roi_features, tf.float32)
+
     print('head_roi_features', name, head_roi_features)
     # reshape inputs before FC.
     _, num_rois, height, width, filters = (
@@ -500,14 +520,10 @@ class FastrcnnCuboidHead(object):
     """
     
     def predict_depth(logits):
-      # NB: bfloat16 here diverges / is unstable
-      logits = tf.cast(logits, tf.float32)
       # Following Hu et al., we map to depth.
       # https://github.com/ucbdrive/3d-vehicle-tracking/blob/ce54b2461c8983aef265ed043dec976c6035d431/3d-tracking/utils/network_utils.py#L115
       # (-inf, inf) -> [0, 1]
       depth_activation = tf.math.sigmoid(logits)
-      # depth_activation = tf.nn.relu6(logits) / 6.
-      # depth_activation = .5 * (tf.nn.tanh(logits) + 1)
       # [0, 1] -> [0, inf)
       return 1. / (depth_activation + 1e-6) - 1. / (1 + 1e-6)
 

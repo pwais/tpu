@@ -49,6 +49,12 @@ class MaskrcnnModel(base_model.Model):
     self._sample_rois_fn = sampling_ops.ROISampler(params.roi_sampling)
     self._sample_masks_fn = sampling_ops.MaskSampler(params.mask_sampling)
     self._sample_cuboids_fn = sampling_ops.CuboidSampler(params.cuboid_sampling)
+    
+    self._rv_backbone_fn = None
+    self._rv_fusion = None
+    if params.architecture.rv_backbone:
+      self._rv_backbone_fn = factory.backbone_generator(params)
+      self._rv_fusion = RVFusion(params.architecture.rv_fusion)
 
     self._frcnn_head_fn = factory.fast_rcnn_head_generator(params.frcnn_head)
     if self._include_mask:
@@ -76,10 +82,17 @@ class MaskrcnnModel(base_model.Model):
     self._transpose_input = params.train.transpose_input
 
   def build_outputs(self, features, labels, mode):
-    is_training = mode == mode_keys.TRAIN
+    is_training = (mode == mode_keys.TRAIN)
     model_outputs = {}
 
     backbone_features = self._backbone_fn(features['images'], is_training)
+    if self._rv_backbone_fn is not None:
+      rv_image_fused = tf.concat(features['rv_images'].values(), axis=-1)
+      rv_backbone_features = self._rv_backbone_fn(
+        rv_image_fused, is_training=is_training)
+      backbone_features = self._rv_fusion(
+        backbone_features, rv_backbone_features)
+    
     fpn_features = self._fpn_fn(backbone_features, is_training)
 
     # Print number of parameters and FLOPS in model.
@@ -268,6 +281,9 @@ class MaskrcnnModel(base_model.Model):
     # back to the original shape before it's used in the computation.
     if self._transpose_input:
       features['images'] = tf.transpose(features['images'], [3, 0, 1, 2])
+      features['rv_images'] = dict(
+          (key, tf.transpose(rv_image, [3, 0, 1, 2]))
+          for key, rv_image in features['rv_images'].items())
 
     outputs = self.model_outputs(features, labels, mode=mode_keys.TRAIN)
     losses = self._build_losses(features, labels, outputs)

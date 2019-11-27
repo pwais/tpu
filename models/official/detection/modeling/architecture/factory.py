@@ -55,6 +55,21 @@ def backbone_generator(params):
   return backbone_fn
 
 
+def rv_backbone_generator(params):
+  """Generator function for various backbone models for RV Image features."""
+  if params.architecture.rv_backbone.backbone == 'resnet':
+    resnet_params = params.rv_backbone.resnet
+    backbone_fn = resnet.Resnet(
+        resnet_depth=resnet_params.resnet_depth,
+        dropblock=dropblock_generator(resnet_params.dropblock),
+        batch_norm_relu=batch_norm_relu_generator(resnet_params.batch_norm))
+  else:
+    raise ValueError('Backbone model %s is not supported.' %
+                     params.architecture.rv_backbone.backbone)
+
+  return backbone_fn
+
+
 def multilevel_features_generator(params):
   """Generator function for various FPN models."""
   if params.architecture.multilevel_features == 'fpn':

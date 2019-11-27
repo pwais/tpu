@@ -24,6 +24,7 @@ from dataloader import mode_keys
 from modeling import base_model
 from modeling import losses
 from modeling.architecture import factory
+from modeling.architecture.nn_ops import RVFusion
 from ops import postprocess_ops
 from utils import benchmark_utils
 
@@ -44,6 +45,12 @@ class RetinanetModel(base_model.Model):
     self._backbone_fn = factory.backbone_generator(params)
     self._fpn_fn = factory.multilevel_features_generator(params)
     self._head_fn = factory.retinanet_head_generator(params.retinanet_head)
+    
+    self._rv_backbone_fn = None
+    self._rv_fusion = None
+    if params.architecture.rv_backbone:
+      self._rv_backbone_fn = factory.backbone_generator(params)
+      self._rv_fusion = RVFusion(params.architecture.rv_fusion)
 
     # Loss function.
     self._cls_loss_fn = losses.RetinanetClassLoss(params.retinanet_loss)
@@ -64,10 +71,20 @@ class RetinanetModel(base_model.Model):
     self._transpose_input = params.train.transpose_input
 
   def build_outputs(self, features, labels, mode):
+    is_training = (mode == mode_keys.TRAIN)
     backbone_features = self._backbone_fn(
-        features['images'], is_training=(mode == mode_keys.TRAIN))
+      features['images'], is_training=is_training)
+    
+    if self._rv_backbone_fn is not None:
+      rv_image_fused = tf.concat(features['rv_images'].values(), axis=-1)
+      rv_backbone_features = self._rv_backbone_fn(
+        rv_image_fused, is_training=is_training)
+      backbone_features = self._rv_fusion(
+        backbone_features, rv_backbone_features)
+
     fpn_features = self._fpn_fn(
         backbone_features, is_training=(mode == mode_keys.TRAIN))
+    
     cls_outputs, box_outputs, cuboid_outputs = self._head_fn(
         fpn_features, is_training=(mode == mode_keys.TRAIN))
     model_outputs = {
@@ -100,6 +117,9 @@ class RetinanetModel(base_model.Model):
     # back to the original shape before it's used in the computation.
     if self._transpose_input:
       features['images'] = tf.transpose(features['images'], [3, 0, 1, 2])
+      features['rv_images'] = dict(
+          (key, tf.transpose(rv_image, [3, 0, 1, 2]))
+          for key, rv_image in features['rv_images'].items())
 
     outputs = self.model_outputs(features, labels, mode=mode_keys.TRAIN)
 

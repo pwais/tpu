@@ -96,6 +96,21 @@ BASE_CFG = {
             'use_sync_bn': False,
         },
     },
+    'rv_backbone' : {
+        'resnet': {
+            'resnet_depth': 50,
+            'dropblock': {
+                'dropblock_keep_prob': None,
+                'dropblock_size': None,
+            },
+            'batch_norm': {
+                'batch_norm_momentum': 0.997,
+                'batch_norm_epsilon': 1e-4,
+                'batch_norm_trainable': True,
+                'use_sync_bn': False,
+            },
+        }
+    },
     'fpn': {
         'min_level': 3,
         'max_level': 7,

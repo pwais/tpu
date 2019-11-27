@@ -34,6 +34,10 @@ MASKRCNN_CFG.override({
         'include_mask': True,
         'include_cuboids': False,
         'cuboid_total_loss_weight': 0.1,
+        'rv_backbone': '',
+        'rv_fusion': {
+            'strategy': 'concat',
+        }
     },
     'maskrcnn_parser': {
         'use_bfloat16': True,
@@ -49,6 +53,7 @@ MASKRCNN_CFG.override({
         'max_num_instances': 100,
         'include_mask': True,
         'include_cuboids': False,
+        'rv_images': [],
         'mask_crop_size': 112,
     },
     'anchor': {

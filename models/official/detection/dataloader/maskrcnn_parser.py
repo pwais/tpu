@@ -81,8 +81,7 @@ class Parser(object):
         image. The groundtruth data will be padded to `max_num_instances`.
       include_mask: a bool to indicate whether parse mask groundtruth.
       include_cuboids: a bool to indicate whether to parse cuboid groundtruth
-      rv_images: list of string; include the Range View Images with these
-        keys.
+      rv_images: list of string; include the Range View Images with these keys.
       mask_crop_size: the size which groundtruth mask is cropped to.
       use_bfloat16: `bool`, if True, cast output image to tf.bfloat16.
       mode: a ModeKeys. Specifies if this is training, evaluation, prediction

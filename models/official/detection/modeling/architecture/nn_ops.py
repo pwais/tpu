@@ -287,3 +287,26 @@ class Dropblock(object):
     net = net / tf.cast(percent_ones, net.dtype) * tf.cast(
         block_pattern, net.dtype)
     return net
+
+
+class RVFusion(object):
+  """TODO"""
+
+  def __init__(self, params):
+    self._strategy = params.strategy
+  
+  def __call__(self, visible_backbone_features, rv_backbone_features):
+    assert visible_backbone_features.keys() == rv_backbone_features.keys()
+    
+    fused_features = {}
+    for level in visible_backbone_features.keys():
+      visible_features = visible_backbone_features[level]
+      rv_features = rv_backbone_features[level]
+
+      if self._strategy == 'concat':
+        fused_features[level] = tf.concat(
+          [visible_features, rv_features], axis=-1)
+      else:
+        raise ValueError("Unsupported strategy %s" % self._strategy)
+      
+    return fused_features
