@@ -205,6 +205,9 @@ class MaskrcnnModel(base_model.Model):
         self.add_scalar_summary('cu_classes_num_nonzero', 
           tf.reduce_sum(
             tf.cast(tf.greater(cu_classes, 0), tf.float32)))
+        self.add_scalar_summary('cu_mean_depth',
+          tf.reduce_mean(
+            fg_cuboids['cuboid/box/center_depth']))
 
         model_outputs.update({
             'cuboid_targets': fg_cuboids,

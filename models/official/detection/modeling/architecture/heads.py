@@ -433,6 +433,7 @@ class FastrcnnCuboidHead(object):
                       top_activation=None,
                       is_training=False):
     head_roi_features = roi_features[name]
+    head_roi_features = tf.cast(head_roi_features, tf.float32)
     print('head_roi_features', name, head_roi_features)
     # reshape inputs before FC.
     _, num_rois, height, width, filters = (
@@ -517,7 +518,7 @@ class FastrcnnCuboidHead(object):
           roi_features, name, num_outputs, class_indices,
           top_activation=top_activation, is_training=is_training)
       else:
-        return self.create_mlp_head(
+        return self.create_fully_conv_head(
           roi_features, name, num_outputs, class_indices,
           top_activation=top_activation, is_training=is_training)
     
