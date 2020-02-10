@@ -111,7 +111,7 @@ class TpuExecutor(object):
         evaluation_master=params.platform.eval_master,
         model_dir=params.model_dir,
         log_step_count_steps=params.train.iterations_per_loop,
-        tpu_config=tpu_config,
+        tpu_config=tpu_config if params.use_tpu else None,
     )
     self._estimator = tf.estimator.tpu.TPUEstimator(
         model_fn=model_fn,
@@ -124,7 +124,12 @@ class TpuExecutor(object):
 
   def train(self, input_fn, steps):
     """Training the model with training data and labels in input_fn."""
+    from tensorflow.python import debug as tf_debug
+    hook = tf_debug.LocalCLIDebugHook(ui_type="readline")
+    hook.add_tensor_filter("has_inf_or_nan", tf_debug.has_inf_or_nan)
     self._estimator.train(input_fn=input_fn, max_steps=steps)
+    # self._estimator.train(input_fn=input_fn, max_steps=steps,
+    #         hooks = [hook])
 
   def prepare_evaluation(self):
     """Preapre for evaluation."""

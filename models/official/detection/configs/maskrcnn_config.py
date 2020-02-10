@@ -32,6 +32,8 @@ MASKRCNN_CFG.override({
         'multilevel_features': 'fpn',
         'use_bfloat16': True,
         'include_mask': True,
+        'include_cuboids': False,
+        'cuboid_total_loss_weight': 0.1,
     },
     'maskrcnn_parser': {
         'use_bfloat16': True,
@@ -46,6 +48,7 @@ MASKRCNN_CFG.override({
         'skip_crowd_during_training': True,
         'max_num_instances': 100,
         'include_mask': True,
+        'include_cuboids': False,
         'mask_crop_size': 112,
     },
     'anchor': {
@@ -98,6 +101,22 @@ MASKRCNN_CFG.override({
             'use_sync_bn': False,
         },
     },
+    'frcnn_cuboid_head': {
+        'num_classes': 91,
+        'cuboid_yaw_num_bins': 8,
+        'fast_rcnn_mlp_head_dim': 1024,
+        'use_mlp': True,
+        'fully_conv_head_num_convs': 4,
+        'fully_conv_head_num_filters': 256,
+        'fully_conv_head_use_separable_conv': False,
+        'use_batch_norm': False,
+        'batch_norm': {
+            'batch_norm_momentum': 0.997,
+            'batch_norm_epsilon': 1e-4,
+            'batch_norm_trainable': True,
+            'use_sync_bn': False,
+        },
+    },
     'rpn_score_loss': {
         'rpn_batch_size_per_im': 256,
     },
@@ -106,6 +125,13 @@ MASKRCNN_CFG.override({
     },
     'frcnn_box_loss': {
         'huber_loss_delta': 1.0,
+    },
+    'frcnn_cuboid_loss': {
+        'huber_loss_delta': 0.1,
+        'cuboid_yaw_use_ego': False,
+        'cuboid_yaw_num_bins': 8,
+        'cuboid_yaw_loss_weight': 0.1,
+        'cuboid_yaw_loss_residual_weight': 0.1,
     },
     'roi_proposal': {
         'rpn_pre_nms_top_k': 2000,
@@ -132,6 +158,9 @@ MASKRCNN_CFG.override({
         'num_mask_samples_per_image': 128,  # Typically = `num_samples_per_image` * `fg_fraction`.
         'mask_target_size': 28,
     },
+    'cuboid_sampling': {
+        'num_cuboid_samples_per_image': 128,
+    },
     'postprocess': {
         'use_batched_nms': False,
         'max_total_size': 100,
@@ -150,5 +179,8 @@ MASKRCNN_RESTRICTIONS = [
     'anchor.min_level == rpn_head.min_level',
     'anchor.max_level == rpn_head.max_level',
     'mrcnn_head.mask_target_size == mask_sampling.mask_target_size',
+    'mrcnn_head.num_classes == frcnn_head.num_classes',
+    'frcnn_cuboid_head.num_classes == frcnn_head.num_classes',
+    'frcnn_cuboid_head.cuboid_yaw_num_bins == frcnn_cuboid_loss.cuboid_yaw_num_bins',
 ]
 # pylint: enable=line-too-long

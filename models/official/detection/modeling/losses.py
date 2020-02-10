@@ -349,6 +349,208 @@ class MaskrcnnLoss(object):
           reduction=tf.losses.Reduction.SUM_BY_NONZERO_WEIGHTS)
 
 
+class FastrcnnCuboidLoss(object):
+  """Fast R-CNN cuboid loss function."""
+
+  def __init__(self, params):
+    self._cuboid_huber_loss_delta = params.huber_loss_delta
+    self._cuboid_yaw_use_ego = params.cuboid_yaw_use_ego
+    self._cuboid_yaw_num_bins = params.cuboid_yaw_num_bins
+    self._cuboid_yaw_loss_weight = params.cuboid_yaw_loss_weight
+    self._cuboid_yaw_loss_residual_weight = (
+      params.cuboid_yaw_loss_residual_weight)
+
+  def __call__(self, cuboid_outputs, cuboid_targets, selected_class_targets):
+    """Computes the cuboid loss for Fast-RCNN.
+    
+    Args:
+      cuboid_outputs: a dict of ouput property to outputs, where each output
+        is a float tensor representing the prediction for each box
+        with a shape of [batch_size, num_cuboids, propety_size].
+      cuboid_targets: a dict of property -> a float tensor representing the
+        labels for each cuboid property with a shape of
+        [batch_size, num_cuboids, property_size].
+      selected_class_targets: a tensor with a shape of [batch_size, num_cuboids],
+        representing the foreground cuboid targets.
+
+    Returns:
+      a dict of loss to scalar tensor representing cuboid regression losses.
+    """
+    with tf.name_scope('fast_rcnn_cuboid_loss'):
+      cuboid_losses = {
+        'cuboid_center':
+          self.center_loss(
+            cuboid_outputs, cuboid_targets, selected_class_targets),
+        'cuboid_depth':
+          self.depth_loss(
+            cuboid_outputs, cuboid_targets, selected_class_targets),
+        'cuboid_yaw':
+          self.yaw_loss(
+            cuboid_outputs, cuboid_targets, selected_class_targets),
+        'cuboid_size':
+          self.size_loss(
+            cuboid_outputs, cuboid_targets, selected_class_targets),
+      }
+      return cuboid_losses
+
+  def _regression_loss(self, r_outputs, r_targets, mask):
+    """Computes a Fast RCNN regression loss."""
+    # r_dims = r_targets.get_shape().as_list()[-1]
+    # normalizer = num_positives * r_dims TODO need this?
+    # r_outputs = tf.where(
+    #           tf.equal(mask, True), tf.stop_gradient(r_outputs), r_outputs)
+    r_loss = tf.losses.huber_loss(
+        r_targets,
+        r_outputs,
+        delta=self._cuboid_huber_loss_delta,
+        weights=mask,
+        reduction=tf.losses.Reduction.SUM_BY_NONZERO_WEIGHTS)
+    return r_loss
+    # r_loss /= normalizer TODO need this?
+    # return tf.reduce_sum(r_loss)
+
+  @staticmethod
+  def _loss_mask(cuboid_prop_outputs, 
+                 selected_class_targets,
+                 force_output_size=None):
+    batch_size, num_cuboids, output_size = (
+      cuboid_prop_outputs.get_shape().as_list())
+    if force_output_size:
+      output_size = force_output_size
+    mask = tf.tile(
+          tf.reshape(tf.greater(selected_class_targets, 0),
+                     [batch_size, num_cuboids, 1]),
+          [1, 1, output_size])
+    return mask
+
+  def center_loss(self, cuboid_outputs, cuboid_targets, selected_class_targets):
+    pred_xy = cuboid_outputs['cuboid_center']
+    label_x = cuboid_targets['cuboid/box/center_x']
+    label_y = cuboid_targets['cuboid/box/center_y']
+    label_xy = tf.concat([label_x, label_y], axis=-1)
+    mask = FastrcnnCuboidLoss._loss_mask(
+              cuboid_outputs['cuboid_center'], selected_class_targets)
+    return self._regression_loss(pred_xy, label_xy, mask)
+  
+  def depth_loss(self, cuboid_outputs, cuboid_targets, selected_class_targets):
+    pred_depth = cuboid_outputs['cuboid_depth']
+    label_depth = cuboid_targets['cuboid/box/center_depth']
+    mask = FastrcnnCuboidLoss._loss_mask(
+              cuboid_outputs['cuboid_depth'], selected_class_targets)
+    return self._regression_loss(pred_depth, label_depth, mask)
+
+  def size_loss(self, cuboid_outputs, cuboid_targets, selected_class_targets):
+    pred_lwh = cuboid_outputs['cuboid_size']
+    label_l = cuboid_targets['cuboid/length']
+    label_w = cuboid_targets['cuboid/width']
+    label_h = cuboid_targets['cuboid/height']
+    label_lwh = tf.concat([label_l, label_w, label_h], axis=-1)
+    mask = FastrcnnCuboidLoss._loss_mask(
+              cuboid_outputs['cuboid_size'], selected_class_targets)
+    return self._regression_loss(pred_lwh, label_lwh, mask)
+
+  def yaw_loss(self, cuboid_outputs, cuboid_targets, selected_class_targets):
+    n_bins = self._cuboid_yaw_num_bins
+    preds = cuboid_outputs['cuboid_yaw']
+
+    if self._cuboid_yaw_use_ego:
+      label_yaw = cuboid_targets['cuboid/cam/yaw']
+    else:
+      label_yaw = cuboid_targets['cuboid/box/perspective_yaw']
+
+    # Following both Hu et al. and Drago et al. (originators), we use
+    # the multibin loss:
+    # https://arxiv.org/pdf/1612.00496.pdf
+    # https://cs.gmu.edu/~amousavi/papers/3D-Deepbox-Supplementary.pdf
+    PI = 3.141592653589793
+        
+    # Normalize to [0, 2pi]
+    target_yaw = (label_yaw + 2*PI) % (2*PI)
+    target_yaw = tf.tile(target_yaw, [1, 1, n_bins])
+    target_yaw = tf.identity(target_yaw, name='target_yaw')
+
+    # Target bins and residuals
+    bin_size_rad = (2*PI) / n_bins
+    theta_bin = tf.range(0, 2*PI, bin_size_rad)
+    cos_thb = tf.math.cos(theta_bin)
+    sin_thb = tf.math.sin(theta_bin)
+
+    target_bin = 1. - tf.math.abs(target_yaw - theta_bin) / bin_size_rad
+    target_bin = tf.maximum(target_bin, tf.zeros_like(target_bin))
+    target_bin /= tf.expand_dims(tf.reduce_sum(target_bin, axis=-1), axis=-1)
+    # target_bin = tf.maximum(target_bin, tf.zeros_like(target_bin))
+    # target_bin = tf.where(
+    #     tf.greater(target_bin, 0.5),
+    #       tf.ones_like(target_bin),
+    #       tf.zeros_like(target_bin))
+    target_residual_cos_th = tf.math.cos(target_yaw) - cos_thb
+    target_residual_sin_th = tf.math.sin(target_yaw) - sin_thb
+      
+    # Prediction bins and residuals
+    yaw_head_n_vals = preds.get_shape().as_list()[-1]
+    assert 3 * n_bins == yaw_head_n_vals
+    # # GUH https://github.com/tensorflow/tensorflow/issues/2540
+    # # Even if we mask the loss below, TF will backprop some NaN gradients
+    # # into the net weights unless we mask them here.  So we need to mask
+    # # off predictions for background
+    # preds_mask = FastrcnnCuboidLoss._loss_mask(preds, selected_class_targets)
+    # # preds_mask = tf.tile(tf.expand_dims(tf.greater(class_targets, 0), axis=2),
+    # #                  [1, 1, yaw_head_n_vals])
+    # preds = tf.where(
+    #           tf.equal(preds_mask, True), tf.stop_gradient(preds), preds)
+
+    pred_bin =    preds[:, :, 0:n_bins]
+    pred_cos_th = preds[:, :, n_bins:2*n_bins]
+    pred_sin_th = preds[:, :, 2*n_bins:]
+    normalizer = tf.sqrt(pred_cos_th ** 2 + pred_sin_th **2 + 1e-9)
+    pred_cos_th /= normalizer
+    pred_sin_th /= normalizer
+
+    # Compute Loss!
+    # tf.nn.sigmoid_cross_entropy_with_logits(labels=targets, logits=logits)
+    # bin_loss = tf.nn.softmax_cross_entropy_with_logits(
+    #                     labels=target_bin, logits=pred_bin,
+    #                     name='bin_loss')
+    loss_mask = FastrcnnCuboidLoss._loss_mask(
+      preds, selected_class_targets, force_output_size=n_bins)
+    loss_mask = tf.cast(loss_mask, tf.float32)
+    bin_loss = tf.losses.sigmoid_cross_entropy(
+                  target_bin, logits=pred_bin, weights=loss_mask,
+                  reduction=tf.losses.Reduction.SUM_BY_NONZERO_WEIGHTS)
+    # bin_loss = tf.nn.sigmoid_cross_entropy_with_logits(
+    #                       labels=target_bin, logits=pred_bin,
+    #                       name='bin_loss')
+    # bin_loss = tf.reduce_
+
+    # Give the target bin residual more weight
+    resid_weights = loss_mask * (target_bin + 1e-3)
+    cos_resid_loss = tf.losses.huber_loss(
+                        target_residual_cos_th,
+                        pred_cos_th,
+                        weights=resid_weights,
+                        delta=0.001, # TODO tune to bin_size_rad ~~~~~~~~~~~~~~~~~~~~
+                        reduction=tf.losses.Reduction.SUM_BY_NONZERO_WEIGHTS)
+    sin_resid_loss = tf.losses.huber_loss(
+                        target_residual_sin_th,
+                        pred_sin_th,
+                        weights=resid_weights,
+                        delta=0.001, # TODO tune to bin_size_rad ~~~~~~~~~~~~~~~~~~~~~~~
+                        reduction=tf.losses.Reduction.SUM_BY_NONZERO_WEIGHTS)
+
+    yaw_loss = (
+      bin_loss + 
+      self._cuboid_yaw_loss_residual_weight * cos_resid_loss + 
+      self._cuboid_yaw_loss_residual_weight * sin_resid_loss)
+    
+    
+    # yaw_loss = loss_mask * yaw_loss
+
+    # normalizer = tf.reduce_sum(loss_mask) + 1
+    # yaw_loss = tf.reduce_sum(yaw_loss) / normalizer
+    yaw_loss = tf.reduce_sum(yaw_loss)
+    return self._cuboid_yaw_loss_weight * yaw_loss
+
+
 class RetinanetClassLoss(object):
   """RetinaNet class loss."""
 
@@ -358,9 +560,7 @@ class RetinanetClassLoss(object):
     self._focal_loss_gamma = params.focal_loss_gamma
 
   def __call__(self, cls_outputs, labels, num_positives):
-    """Computes total detection loss.
-
-    Computes total detection loss including box and class loss from all levels.
+    """Computes class loss from all levels.
 
     Args:
       cls_outputs: an OrderDict with keys representing levels and values
@@ -371,7 +571,7 @@ class RetinanetClassLoss(object):
       num_positives: number of positive examples in the minibatch.
 
     Returns:
-      an integar tensor representing total class loss.
+      an scalar tensor representing total class loss.
     """
     # Sums all positives in a batch for normalization and avoids zero
     # num_positives_sum, which would lead to inf loss during training
@@ -412,9 +612,7 @@ class RetinanetBoxLoss(object):
     self._huber_loss_delta = params.huber_loss_delta
 
   def __call__(self, box_outputs, labels, num_positives):
-    """Computes box detection loss.
-
-    Computes total detection loss including box and class loss from all levels.
+    """Computes box detection loss from all levels.
 
     Args:
       box_outputs: an OrderDict with keys representing levels and values
@@ -425,7 +623,7 @@ class RetinanetBoxLoss(object):
       num_positives: number of positive examples in the minibatch.
 
     Returns:
-      an integar tensor representing total box regression loss.
+      an scalar tensor representing total box regression loss.
     """
     # Sums all positives in a batch for normalization and avoids zero
     # num_positives_sum, which would lead to inf loss during training
@@ -455,6 +653,232 @@ class RetinanetBoxLoss(object):
         reduction=tf.losses.Reduction.SUM)
     box_loss /= normalizer
     return box_loss
+
+
+class RetinanetCuboidLoss(object):
+  """RetinaNet cuboid loss."""
+
+  def __init__(self, params):
+    self._cuboid_yaw_use_ego = params.cuboid_yaw_use_ego
+    self._cuboid_yaw_num_bins = params.cuboid_yaw_num_bins
+    self._cuboid_yaw_loss_weight = params.cuboid_yaw_loss_weight
+    self._cuboid_yaw_loss_residual_weight = (
+      params.cuboid_yaw_loss_residual_weight)
+    self._cuboid_huber_loss_delta = params.cuboid_huber_loss_delta
+
+  def __call__(self, cuboid_outputs, labels, num_positives):
+    """Computes cuboid estimation loss.
+
+    Computes cuboid losses from all levels.
+
+    Args:
+      cuboid_outputs: a dict of ouput property to outputs.  Each individual
+        output is an OrderDict with keys representing levels and values
+        representing logits in [batch_size, height, width,
+        num_anchors * output_dimension].
+      labels: the dictionary that returned from dataloader that includes
+        cuboid groundturth targets.
+      num_positives: number of positive examples in the minibatch.
+
+    Returns:
+      a dict of loss to scalar tensor representing cuboid regression losses.
+    """
+    # Sums all positives in a batch for normalization and avoids zero
+    # num_positives_sum, which would lead to inf loss during training
+    num_positives_sum = tf.reduce_sum(num_positives) + 1.0
+
+    cuboid_losses = {
+      'cuboid_center':
+        self.center_loss(cuboid_outputs, labels, num_positives_sum),
+      'cuboid_depth': 
+        self.depth_loss(cuboid_outputs, labels, num_positives_sum),
+      'cuboid_size': 
+        self.size_loss(cuboid_outputs, labels, num_positives_sum),
+      'cuboid_yaw': 
+        self.yaw_loss(cuboid_outputs, labels, num_positives_sum),
+    }
+    return cuboid_losses
+  
+  def center_loss(self, cuboid_outputs, labels, num_positives_sum):
+    center_losses = []
+    for level in cuboid_outputs.keys():
+      pred_xy = cuboid_outputs[level]['cuboid_center']
+      label_x = tf.expand_dims(labels['cuboid/box/center_x'][level], -1)
+      label_y = tf.expand_dims(labels['cuboid/box/center_y'][level], -1)
+      label_xy = tf.concat([label_x, label_y], axis=-1)
+      center_losses.append(
+        self._regression_loss(pred_xy, label_xy, num_positives_sum))
+    # Sums per level losses to total loss.
+    return tf.add_n(center_losses)
+
+  def depth_loss(self, cuboid_outputs, labels, num_positives_sum):
+    depth_losses = []
+    for level in cuboid_outputs.keys():
+      pred_depth = cuboid_outputs[level]['cuboid_depth']
+      label_depth = tf.expand_dims(
+        labels['cuboid/box/center_depth'][level], -1)
+      depth_losses.append(
+        self._regression_loss(pred_depth, label_depth, num_positives_sum))
+    # Sums per level losses to total loss.
+    return tf.add_n(depth_losses)
+
+  def size_loss(self, cuboid_outputs, labels, num_positives_sum):
+    size_losses = []
+    for level in cuboid_outputs.keys():
+      pred_lwh = cuboid_outputs[level]['cuboid_size']
+      label_l = labels['cuboid/length'][level]
+      label_w = labels['cuboid/width'][level]
+      label_h = labels['cuboid/height'][level]
+      label_lwh = tf.concat([
+                    tf.expand_dims(label_l, axis=-1),
+                    tf.expand_dims(label_w, axis=-1),
+                    tf.expand_dims(label_h, axis=-1)],
+                    axis=-1)
+      size_losses.append(
+        self._regression_loss(pred_lwh, label_lwh, num_positives_sum))
+    # Sums per level losses to total loss.
+    return tf.add_n(size_losses)
+
+  def yaw_loss(self, cuboid_outputs, labels, num_positives_sum,
+                        ignore_label=float('-inf')):
+    n_bins = self._cuboid_yaw_num_bins
+    yaw_losses = []
+    for level in cuboid_outputs.keys():
+      preds = cuboid_outputs[level]['cuboid_yaw']
+
+      # preds = tf.check_numerics(preds, 'preds')
+      if self._cuboid_yaw_use_ego:
+        label_yaw = labels['cuboid/cam/yaw'][level]
+      else:
+        label_yaw = labels['cuboid/box/perspective_yaw'][level]
+
+      # Following both Hu et al. and Drago et al. (originators), we use
+      # the multibin loss:
+      # https://arxiv.org/pdf/1612.00496.pdf
+      # https://cs.gmu.edu/~amousavi/papers/3D-Deepbox-Supplementary.pdf
+      # NOPE Adapted from:
+      # NOPE https://github.com/ucbdrive/3d-vehicle-tracking/blob/2bb6b23fcfa1fbb5982ce7fe1a8471df18777518/3d-tracking/utils/network_utils.py#L24
+
+      PI = 3.141592653589793
+        
+      # Normalize to [0, 2pi]
+      target_yaw = (label_yaw + 2*PI) % (2*PI)
+      target_yaw = tf.expand_dims(target_yaw, -1)
+      target_yaw = tf.tile(target_yaw, [1, 1, 1, 1, n_bins])
+      target_yaw = tf.identity(target_yaw, name='target_yaw_%s' % level)
+
+      bin_size_rad = (2*PI) / n_bins
+      theta_bin = tf.range(0, 2*PI, bin_size_rad)
+      cos_thb = tf.math.cos(theta_bin)
+      sin_thb = tf.math.sin(theta_bin)
+
+      target_bin = 1. - tf.math.abs(target_yaw - theta_bin) / bin_size_rad
+      target_bin = tf.maximum(target_bin, tf.zeros_like(target_bin))
+      target_residual_cos_th = tf.math.cos(target_yaw) - cos_thb
+      target_residual_sin_th = tf.math.sin(target_yaw) - sin_thb
+      
+      yaw_head_n_vals = preds.get_shape().as_list()[-1]
+      assert 3 * n_bins == yaw_head_n_vals
+      # GUH https://github.com/tensorflow/tensorflow/issues/2540
+      # Even if we mask the loss below, TF will backprop some NaN gradients
+      # into the net weights unless we mask them here.
+      mask = tf.expand_dims(label_yaw, -1)
+      mask = tf.tile(mask, [1, 1, 1, 1, yaw_head_n_vals])
+      preds = tf.where(
+                tf.equal(mask, ignore_label), tf.stop_gradient(preds), preds)
+
+      pred_bin =    preds[:, :, :, :, 0:n_bins]
+      pred_cos_th = preds[:, :, :, :, n_bins:2*n_bins]
+      pred_sin_th = preds[:, :, :, :, 2*n_bins:]
+      normalizer = tf.sqrt(pred_cos_th ** 2 + pred_sin_th **2 + 1e-9)
+      pred_cos_th /= normalizer
+      pred_sin_th /= normalizer
+
+      # pred_cos_th = tf.check_numerics(pred_cos_th, 'pred_cos_th')
+      # target_residual_cos_th = tf.check_numerics(target_residual_cos_th, 'target_residual_cos_th')
+      # tf.stop_gradient
+      # # Less numerical stability, but our dimensionality is small
+      # pred_bin_softmax = tf.nn.softmax(pred_bin)
+      # bin_loss = -1 * target_bin * tf.log(pred_bin_softmax)
+      bin_loss = tf.nn.softmax_cross_entropy_with_logits(
+                        labels=target_bin, logits=pred_bin,
+                        name='bin_loss_%s' % level)
+
+      # Give the target bin residual more weight
+      resid_weights = target_bin + 1e-3
+      cos_resid_loss = tf.losses.huber_loss(
+                          target_residual_cos_th,
+                          pred_cos_th,
+                          weights=resid_weights,
+                          delta=0.01, # TODO tune to bin_size_rad ~~~~~~~~~~~~~~~~~~~~
+                          reduction=tf.losses.Reduction.NONE)
+      sin_resid_loss = tf.losses.huber_loss(
+                          target_residual_sin_th,
+                          pred_sin_th,
+                          weights=resid_weights,
+                          delta=0.01, # TODO tune to bin_size_rad ~~~~~~~~~~~~~~~~~~~~~~~
+                          reduction=tf.losses.Reduction.NONE)
+      
+      # # bin_loss = tf.check_numerics(filter_loss(bin_loss), 'moofbin')
+      # cos_resid_loss = tf.check_numerics(filter_loss(cos_resid_loss), 'cos_resid_loss')
+      # sin_resid_loss = tf.check_numerics(filter_loss(sin_resid_loss), 'sin_resid_loss')
+
+      yaw_loss = (
+        bin_loss + 
+        self._cuboid_yaw_loss_residual_weight * 
+          tf.reduce_mean(cos_resid_loss, axis=-1) + 
+        self._cuboid_yaw_loss_residual_weight *
+          tf.reduce_mean(sin_resid_loss, axis=-1))
+
+      yaw_loss = tf.where(tf.equal(label_yaw, ignore_label),
+                           tf.zeros_like(label_yaw, dtype=tf.float32),
+                           yaw_loss)
+      
+      # yaw_loss = tf.where(tf.equal(yaw_loss, float('nan')),
+      #                      tf.zeros_like(yaw_loss, dtype=tf.float32),
+      #                      yaw_loss)
+
+      # import pdb; pdb.set_trace()
+      # label_yaw = tf.check_numerics(label_yaw, 'label_yaw')
+      # yaw_loss = tf.check_numerics(yaw_loss, 'yaw_loss')
+      yaw_loss = tf.reduce_sum(yaw_loss)
+
+      # ignore_loss = tf.where(tf.equal(label_yaw, ignore_label),
+      #                      tf.zeros_like(label_yaw, dtype=tf.float32),
+      #                      tf.ones_like(label_yaw, dtype=tf.float32))
+      # # ignore_loss = tf.where(tf.equal(label_yaw, ignore_label),
+      # #                       tf.zeros_like(label_yaw, dtype=tf.float32),
+      # #                       tf.ones_like(label_yaw, dtype=tf.float32),)
+      # # ignore_loss = tf.expand_dims(ignore_loss, -1)
+      # # ignore_loss = tf.tile(ignore_loss, [1, 1, 1, 1, yaw_head_n_vals])
+      # # import pdb; pdb.set_trace()
+      # # ignore_loss = tf.reshape(ignore_loss, tf.shape(yaw_loss))
+
+      # filtered_yaw_loss = tf.reduce_sum(
+      #   ignore_loss * yaw_loss, name='filtered_yaw_loss_%s' % level)
+
+      yaw_losses.append(yaw_loss)
+    
+    # Sums per level losses to total loss.
+    total_loss = tf.add_n(yaw_losses) / num_positives_sum
+    return self._cuboid_yaw_loss_weight * total_loss
+
+  def _regression_loss(self, r_outputs, r_targets, num_positives,
+                 ignore_label=float('-inf')):
+    """Computes a RetinaNet regression loss."""
+    r_dims = r_targets.get_shape().as_list()[-1]
+
+    normalizer = num_positives * r_dims
+    r_loss = tf.losses.huber_loss(
+        r_targets,
+        r_outputs,
+        delta=self._cuboid_huber_loss_delta,
+        reduction=tf.losses.Reduction.NONE)
+    r_loss /= normalizer
+    r_loss = tf.where(tf.equal(r_targets, ignore_label),
+                           tf.zeros_like(r_targets, dtype=tf.float32),
+                           r_loss)
+    return tf.reduce_sum(r_loss)
 
 
 class ShapemaskMseLoss(object):

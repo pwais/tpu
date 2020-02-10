@@ -234,7 +234,7 @@ class TargetAssigner(object):
   def _create_classification_targets(self, groundtruth_labels, match):
     """Create classification targets for each anchor.
 
-    Assign a classification target of for each anchor to the matching
+    Assign a classification target for each anchor to the matching
     groundtruth label that is provided by match.  Anchors that are not matched
     to anything are given the target self._unmatched_cls_target
 

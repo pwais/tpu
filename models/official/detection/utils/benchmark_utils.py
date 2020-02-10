@@ -18,7 +18,10 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-from absl import logging
+# TICKETME prefer tf logging due to absl logging fiasco
+# https://github.com/abseil/abseil-py/issues/99
+# https://github.com/abseil/abseil-py/issues/102
+# from absl import logging
 import numpy as np
 import tensorflow.compat.v1 as tf
 
@@ -27,16 +30,17 @@ def compute_model_statistics(batch_size, is_training=True):
   """Compute number of parameters and FLOPS."""
   num_trainable_params = np.sum(
       [np.prod(var.get_shape().as_list()) for var in tf.trainable_variables()])
-  logging.info('number of trainable params: %d', num_trainable_params)
+  tf.logging.info(
+    'number of trainable params: %5.2fM', 1e-6 * num_trainable_params)
 
   options = tf.profiler.ProfileOptionBuilder.float_operation()
   options['output'] = 'none'
   flops = tf.profiler.profile(
       tf.get_default_graph(), options=options).total_float_ops
-  flops_per_image = flops / batch_size
+  tflops_per_image = 1e-12 * flops / batch_size
   if is_training:
-    logging.info(
-        'number of FLOPS per image: %d in training', flops_per_image)
+    tf.logging.info(
+        'number of TFLOPS per image: %5.2f in training', tflops_per_image)
   else:
-    logging.info(
-        'number of FLOPS per image: %d in eval', flops_per_image)
+    tf.logging.info(
+        'number of TFLOPS per image: %5.2f in eval', tflops_per_image)

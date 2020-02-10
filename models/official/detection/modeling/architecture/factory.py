@@ -93,8 +93,10 @@ def retinanet_head_generator(params):
       params.anchors_per_location,
       params.retinanet_head_num_convs,
       params.retinanet_head_num_filters,
-      params.use_separable_conv,
-      params.use_batch_norm,
+      use_separable_conv=params.use_separable_conv,
+      use_batch_norm=params.use_batch_norm,
+      predict_cuboids=params.predict_cuboids,
+      cuboid_yaw_num_bins=params.cuboid_yaw_num_bins,
       batch_norm_relu=batch_norm_relu_generator(params.batch_norm))
 
 
@@ -125,6 +127,20 @@ def mask_rcnn_head_generator(params):
                             batch_norm_relu=batch_norm_relu_generator(
                                 params.batch_norm))
 
+def fast_rcnn_cuboid_head_generator(params):
+  """Generator function for Fast R-CNN cuboid head architecture."""
+  return heads.FastrcnnCuboidHead(
+    params.num_classes,
+    params.fast_rcnn_mlp_head_dim,
+    cuboid_yaw_num_bins=params.cuboid_yaw_num_bins,
+    use_mlp=params.use_mlp,
+    fully_conv_head_num_convs=params.fully_conv_head_num_convs,
+    fully_conv_head_num_filters=params.fully_conv_head_num_filters,
+    fully_conv_head_use_separable_conv=
+        params.fully_conv_head_use_separable_conv,
+    use_batch_norm=params.use_batch_norm,
+    batch_norm_relu=batch_norm_relu_generator(
+        params.batch_norm))
 
 def shapeprior_head_generator(params):
   """Generator function for RetinaNet head architecture."""

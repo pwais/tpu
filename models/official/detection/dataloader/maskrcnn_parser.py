@@ -44,6 +44,7 @@ class Parser(object):
                skip_crowd_during_training=True,
                max_num_instances=100,
                include_mask=False,
+               include_cuboids=False,
                mask_crop_size=112,
                use_bfloat16=True,
                mode=None):
@@ -78,6 +79,7 @@ class Parser(object):
       max_num_instances: `int` number of maximum number of instances in an
         image. The groundtruth data will be padded to `max_num_instances`.
       include_mask: a bool to indicate whether parse mask groundtruth.
+      include_cuboids: a bool to indicate whether to parse cuboid groundtruth
       mask_crop_size: the size which groundtruth mask is cropped to.
       use_bfloat16: `bool`, if True, cast output image to tf.bfloat16.
       mode: a ModeKeys. Specifies if this is training, evaluation, prediction
@@ -89,7 +91,8 @@ class Parser(object):
     self._is_training = (mode == ModeKeys.TRAIN)
 
     self._example_decoder = tf_example_decoder.TfExampleDecoder(
-        include_mask=include_mask)
+        include_mask=include_mask,
+        include_cuboids=include_cuboids)
 
     # Anchor.
     self._output_size = output_size
@@ -113,6 +116,9 @@ class Parser(object):
     # Mask.
     self._include_mask = include_mask
     self._mask_crop_size = mask_crop_size
+
+    # Cuboid
+    self._include_cuboids = include_cuboids
 
     # Device.
     self._use_bfloat16 = use_bfloat16
@@ -141,6 +147,40 @@ class Parser(object):
     with tf.name_scope('parser'):
       data = self._example_decoder.decode(value)
       return self._parse_fn(data)
+
+  ## Cuboid Utils
+
+  def __get_cuboid_targets(self, data, indices):
+    if not self._include_cuboids:
+      return {}
+    
+    CUBOID_TARGET_KEYS = (
+      # Position
+      'cuboid/box/center_x', 'cuboid/box/center_y',
+      'cuboid/box/center_depth',
+      # Orientation
+      'cuboid/box/perspective_yaw',
+      'cuboid/cam/yaw',
+      # Size
+      'cuboid/length', 'cuboid/width', 'cuboid/height',
+    )
+    cuboid_targets = {}
+    for target_key in CUBOID_TARGET_KEYS:
+      target_gt = data[target_key]
+      targets = tf.gather(target_gt, indices)
+      gt_labels = tf.cast(tf.expand_dims(targets, axis=1), tf.float32)
+      gt_labels = tf.identity(gt_labels, name=target_key)
+      cuboid_targets[target_key] = input_utils.pad_to_fixed_size(
+          gt_labels, self._max_num_instances, -1)
+    return cuboid_targets
+
+  def __maybe_add_cuboid_gts(self, groundtruths, data):
+    if self._include_cuboids:
+      for key in data.keys():
+        if key.startswith('cuboid/'):
+          groundtruths[key] = data[key]
+
+  ## One Prase function per mode
 
   def _parse_train_data(self, data):
     """Parses data for training.
@@ -176,6 +216,7 @@ class Parser(object):
           with -1 to the fixed dimension [self._max_num_instances].
         gt_masks: groundtrugh masks cropped by the bounding box and
           resized to a fixed size determined by mask_crop_size.
+        (Optional: cuboid/-prefixed attributes)
     """
     classes = data['groundtruth_classes']
     boxes = data['groundtruth_boxes']
@@ -261,6 +302,8 @@ class Parser(object):
         self._aspect_ratios,
         self._anchor_size,
         (image_height, image_width))
+    tf.logging.info(
+      "Number of anchor boxes: %s" % input_anchor.boxes.shape[0])
     anchor_labeler = anchor.RpnAnchorLabeler(
         input_anchor,
         self._rpn_match_threshold,
@@ -288,6 +331,8 @@ class Parser(object):
     if self._include_mask:
       labels['gt_masks'] = input_utils.pad_to_fixed_size(
           masks, self._max_num_instances, -1)
+    if self._include_cuboids:
+      labels['cuboid_targets'] = self.__get_cuboid_targets(data, indices)
 
     return image, labels
 
@@ -346,12 +391,20 @@ class Parser(object):
         self._aspect_ratios,
         self._anchor_size,
         (image_height, image_width))
+    tf.logging.info(
+      "Number of anchor boxes: %s" % input_anchor.boxes.shape[0])
 
     labels = {
         'source_id': dataloader_utils.process_source_id(data['source_id']),
         'anchor_boxes': input_anchor.multilevel_boxes,
         'image_info': image_info,
+        'filename_utf8s': data['filename_utf8s'].set_shape([10000]),
+          # TPU does not support strings :(
     }
+    if self._include_cuboids:
+      labels['cuboid_targets'] = self.__get_cuboid_targets(data, indices)
+
+    # TODO: if self._include_mask section?
 
     if self._mode == ModeKeys.PREDICT_WITH_GT:
       # Converts boxes from normalized coordinates to pixel coordinates.
@@ -359,6 +412,8 @@ class Parser(object):
           data['groundtruth_boxes'], image_shape)
       groundtruths = {
           'source_id': data['source_id'],
+          'filename_utf8s': data['filename_utf8s'].set_shape([10000]),
+            # TPU does not support strings :(
           'height': data['height'],
           'width': data['width'],
           'num_detections': tf.shape(data['groundtruth_classes']),
@@ -369,6 +424,7 @@ class Parser(object):
       }
       groundtruths['source_id'] = dataloader_utils.process_source_id(
           groundtruths['source_id'])
+      self.__maybe_add_cuboid_gts(groundtruths, data)
       groundtruths = dataloader_utils.pad_groundtruths_to_fixed_size(
           groundtruths, self._max_num_instances)
       labels['groundtruths'] = groundtruths

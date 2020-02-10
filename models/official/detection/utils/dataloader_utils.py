@@ -36,5 +36,14 @@ def pad_groundtruths_to_fixed_size(gt, n):
   gt['is_crowds'] = input_utils.pad_to_fixed_size(gt['is_crowds'], n, 0)
   gt['areas'] = input_utils.pad_to_fixed_size(gt['areas'], n, -1)
   gt['classes'] = input_utils.pad_to_fixed_size(gt['classes'], n, -1)
+
+  # EXTRA_KEYS = (
+  #   'filename_utf8s',
+  # )
+  gt['filename_utf8s'].set_shape([10000])
+  for k in gt.keys():
+    if k.startswith('cuboid/'):
+      gt[k] = input_utils.pad_to_fixed_size(gt[k], n, -1)
+
   return gt
 

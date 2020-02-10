@@ -34,6 +34,12 @@ class RetinanetModel(base_model.Model):
   def __init__(self, params):
     super(RetinanetModel, self).__init__(params)
 
+    # TODO: Support more complicated params checks in Params itself
+    assert (
+      params.retinanet_head.anchors_per_location == 
+      params.anchor.num_scales * len(params.anchor.aspect_ratios)), \
+        params.as_dict()
+
     # Architecture generators.
     self._backbone_fn = factory.backbone_generator(params)
     self._fpn_fn = factory.multilevel_features_generator(params)
@@ -42,7 +48,14 @@ class RetinanetModel(base_model.Model):
     # Loss function.
     self._cls_loss_fn = losses.RetinanetClassLoss(params.retinanet_loss)
     self._box_loss_fn = losses.RetinanetBoxLoss(params.retinanet_loss)
+    self._cuboid_loss_fn = None
+    self._predict_cuboids = False
+    if params.retinanet_loss.include_cuboid_loss:
+      self._cuboid_loss_fn = losses.RetinanetCuboidLoss(params.retinanet_loss)
+      self._predict_cuboids = True
+
     self._box_loss_weight = params.retinanet_loss.box_loss_weight
+    self._cuboid_loss_weight = params.retinanet_loss.cuboid_loss_weight
 
     # Predict function.
     self._generate_detections_fn = postprocess_ops.MultilevelDetectionGenerator(
@@ -55,11 +68,12 @@ class RetinanetModel(base_model.Model):
         features, is_training=(mode == mode_keys.TRAIN))
     fpn_features = self._fpn_fn(
         backbone_features, is_training=(mode == mode_keys.TRAIN))
-    cls_outputs, box_outputs = self._head_fn(
+    cls_outputs, box_outputs, cuboid_outputs = self._head_fn(
         fpn_features, is_training=(mode == mode_keys.TRAIN))
     model_outputs = {
         'cls_outputs': cls_outputs,
         'box_outputs': box_outputs,
+        'cuboid_outputs': cuboid_outputs,
     }
 
     # Print number of parameters and FLOPS in model.
@@ -68,14 +82,16 @@ class RetinanetModel(base_model.Model):
         batch_size, is_training=(mode == mode_keys.TRAIN))
 
     if mode != mode_keys.TRAIN:
-      boxes, scores, classes, valid_detections = self._generate_detections_fn(
+      boxes, scores, classes, valid_detections, cuboids = (
+        self._generate_detections_fn(
           box_outputs, cls_outputs, labels['anchor_boxes'],
-          labels['image_info'][:, 1:2, :])
+          labels['image_info'][:, 1:2, :], cuboid_outputs=cuboid_outputs))
       model_outputs.update({
           'num_detections': valid_detections,
           'detection_boxes': boxes,
           'detection_classes': classes,
           'detection_scores': scores,
+          'detection_cuboids': cuboids,
       })
     return model_outputs
 
@@ -93,10 +109,32 @@ class RetinanetModel(base_model.Model):
     box_loss = self._box_loss_fn(
         outputs['box_outputs'], labels['box_targets'], labels['num_positives'])
     model_loss = cls_loss + self._box_loss_weight * box_loss
-
+    
     self.add_scalar_summary('cls_loss', cls_loss)
     self.add_scalar_summary('box_loss', box_loss)
     self.add_scalar_summary('model_loss', model_loss)
+
+    # Optionally add cuboid losses
+    if self._cuboid_loss_fn is not None:
+        # FIXME ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+        ignore_label=float('-inf')
+        for k, l_to_t in labels['cuboid_targets'].items():
+            for level, ttensor in l_to_t.items():
+                k_nice = k.replace('/', '_')
+                k_nice = 'num_non_empty/' + k_nice
+                num_non_inf = tf.reduce_sum(
+                    tf.where(tf.equal(ttensor, ignore_label),
+                            tf.zeros_like(ttensor, dtype=tf.float32),
+                            tf.ones_like(ttensor, dtype=tf.float32)))
+                self.add_scalar_summary(k_nice, num_non_inf)
+            break # only do one key
+        
+        cuboid_losses = self._cuboid_loss_fn(
+            outputs['cuboid_outputs'], labels['cuboid_targets'],
+            labels['num_positives'])
+        for cuboid_prop, loss_value in cuboid_losses.items():
+            model_loss = model_loss + self._cuboid_loss_weight * loss_value
+            self.add_scalar_summary(cuboid_prop + '_loss', loss_value)
 
     total_loss, train_op = self.optimize(model_loss)
     scaffold_fn = self.restore_from_checkpoint()
@@ -123,16 +161,21 @@ class RetinanetModel(base_model.Model):
         images, labels=labels, mode=mode_keys.PREDICT)
 
     predictions = {
+        'images': images,
         'pred_image_info': labels['image_info'],
         'pred_num_detections': outputs['num_detections'],
         'pred_detection_boxes': outputs['detection_boxes'],
         'pred_detection_classes': outputs['detection_classes'],
         'pred_detection_scores': outputs['detection_scores'],
     }
+    for prop, detections in outputs['detection_cuboids'].items():
+      predictions['pred_' + prop] = detections
 
     if 'groundtruths' in labels:
-      predictions['pred_source_id'] = labels['groundtruths']['source_id']
-      predictions['gt_source_id'] = labels['groundtruths']['source_id']
+      # predictions['pred_source_id'] = labels['groundtruths']['source_id']
+      predictions['pred_filename_utf8s'] = (
+        labels['groundtruths']['filename_utf8s'])
+      # predictions['gt_source_id'] = labels['groundtruths']['source_id']
       predictions['gt_image_info'] = labels['image_info']
       predictions['gt_num_detections'] = (
           labels['groundtruths']['num_detections'])
@@ -140,6 +183,9 @@ class RetinanetModel(base_model.Model):
       predictions['gt_classes'] = labels['groundtruths']['classes']
       predictions['gt_areas'] = labels['groundtruths']['areas']
       predictions['gt_is_crowds'] = labels['groundtruths']['is_crowds']
+      for gt_key in labels['groundtruths']:
+        if gt_key.startswith('cuboid/'):
+          predictions['gt_' + gt_key] = labels['groundtruths'][gt_key]
 
       # Computes model loss for logging.
       cls_loss = self._cls_loss_fn(
@@ -157,7 +203,19 @@ class RetinanetModel(base_model.Model):
           tf.reshape(cls_loss, [1]), [batch_size])
       predictions['loss_box_loss'] = tf.tile(
           tf.reshape(box_loss, [1]), [batch_size])
+    
+      # Optionally add cuboid losses
+      if self._cuboid_loss_fn is not None:
+        cuboid_losses = self._cuboid_loss_fn(
+            outputs['cuboid_outputs'], labels['cuboid_targets'],
+            labels['num_positives'])
+        for cuboid_prop, loss_value in cuboid_losses.items():
+          model_loss = model_loss + self._cuboid_loss_weight * loss_value
+          predictions['loss_' + cuboid_prop] = tf.tile(
+            tf.reshape(loss_value, [1]), [batch_size])
+
       predictions['loss_model_loss'] = tf.tile(
           tf.reshape(model_loss, [1]), [batch_size])
+    
     return tf.estimator.tpu.TPUEstimatorSpec(
         mode=tf.estimator.ModeKeys.PREDICT, predictions=predictions)
