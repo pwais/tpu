@@ -51,6 +51,7 @@ class Parser(object):
                max_num_instances=100,
                use_bfloat16=True,
                regenerate_source_id=False,
+               include_cuboids=False,
                mode=None):
     """Initializes parameters for parsing annotations in the dataset.
 
@@ -62,7 +63,7 @@ class Parser(object):
       num_scales: `int` number representing intermediate scales added
         on each level. For instances, num_scales=2 adds one additional
         intermediate anchor scales [2^0, 2^0.5] on each level.
-      aspect_ratios: `list` of float numbers representing the aspect raito
+      aspect_ratios: `list` of float numbers representing the aspect ratio
         anchors added on each level. The number indicates the ratio of width to
         height. For instances, aspect_ratios=[1.0, 2.0, 0.5] adds three anchors
         on each scale level.
@@ -91,6 +92,7 @@ class Parser(object):
       use_bfloat16: `bool`, if True, cast output image to tf.bfloat16.
       regenerate_source_id: `bool`, if True TFExampleParser will use hashed
         value of `image/encoded` for `image/source_id`.
+      include_cuboids: `bool`, if True, load cuboid groundtruths
       mode: a ModeKeys. Specifies if this is training, evaluation, prediction or
         prediction with groundtruths in the outputs.
     """
@@ -98,9 +100,12 @@ class Parser(object):
     self._max_num_instances = max_num_instances
     self._skip_crowd_during_training = skip_crowd_during_training
     self._is_training = (mode == ModeKeys.TRAIN)
+    self._include_cuboids = include_cuboids
 
     self._example_decoder = tf_example_decoder.TfExampleDecoder(
-        include_mask=False, regenerate_source_id=regenerate_source_id)
+        include_mask=False,
+        regenerate_source_id=regenerate_source_id,
+        include_cuboids=include_cuboids)
 
     # Anchor.
     self._output_size = output_size
@@ -174,10 +179,49 @@ class Parser(object):
           is_crowds: groundtruth annotations to indicate if an annotation
             represents a group of instances by value {0, 1}. The tennsor is
             padded with 0 to the fixed dimension [self._max_num_instances].
+          
+          (Optional: cuboid/-prefixed attributes) 
     """
     with tf.name_scope('parser'):
       data = self._example_decoder.decode(value)
       return self._parse_fn(data)
+
+
+  ## Cuboid Utils
+
+  def __get_cuboid_targets(self, data, anchor_labeler, boxes, indices):
+    if not self._include_cuboids:
+      return {}
+    
+    CUBOID_TARGET_KEYS = (
+      # Position
+      'cuboid/box/center_x', 'cuboid/box/center_y',
+      'cuboid/box/center_depth',
+      # Orientation
+      'cuboid/box/perspective_yaw',
+      'cuboid/cam/yaw',
+      # Size
+      'cuboid/length', 'cuboid/width', 'cuboid/height',
+    )
+    cuboid_targets = {}
+    for target_key in CUBOID_TARGET_KEYS:
+      target_gt = data[target_key]
+      targets = tf.gather(target_gt, indices)
+      gt_labels = tf.cast(tf.expand_dims(targets, axis=1), tf.float32)
+      gt_labels = tf.identity(gt_labels, name=target_key)
+      t_targets, t_box_targets, _ = anchor_labeler.label_anchors(
+        boxes, gt_labels, unmatched_value=float('-inf'))
+      cuboid_targets[target_key] = t_targets
+    return cuboid_targets
+
+  def __maybe_add_cuboid_gts(self, groundtruths, data):
+    if self._include_cuboids:
+      for key in data.keys():
+        if key.startswith('cuboid/'):
+          groundtruths[key] = data[key]
+
+
+  ## One Parse function per mode
 
   def _parse_train_data(self, data):
     """Parses data for training and evaluation."""
@@ -251,16 +295,19 @@ class Parser(object):
     input_anchor = anchor.Anchor(
         self._min_level, self._max_level, self._num_scales,
         self._aspect_ratios, self._anchor_size, (image_height, image_width))
+    tf.logging.info(
+      "Number of anchor boxes: %s" % input_anchor.boxes.shape[0])
+    
     anchor_labeler = anchor.AnchorLabeler(
         input_anchor, self._match_threshold, self._unmatched_threshold)
     (cls_targets, box_targets, num_positives) = anchor_labeler.label_anchors(
         boxes,
         tf.cast(tf.expand_dims(classes, axis=1), tf.float32))
-
+    
     # If bfloat16 is used, casts input image to tf.bfloat16.
     if self._use_bfloat16:
       image = tf.cast(image, dtype=tf.bfloat16)
-
+    
     # Packs labels for model_fn outputs.
     labels = {
         'cls_targets': cls_targets,
@@ -269,6 +316,11 @@ class Parser(object):
         'num_positives': num_positives,
         'image_info': image_info,
     }
+
+    if self._include_cuboids:
+      labels['cuboid_targets'] = self.__get_cuboid_targets(
+                                        data, anchor_labeler, boxes, indices)
+
     return image, labels
 
   def _parse_eval_data(self, data):
@@ -311,6 +363,9 @@ class Parser(object):
     input_anchor = anchor.Anchor(
         self._min_level, self._max_level, self._num_scales,
         self._aspect_ratios, self._anchor_size, (image_height, image_width))
+    tf.logging.info(
+      "Number of anchor boxes: %s" % input_anchor.boxes.shape[0])
+
     anchor_labeler = anchor.AnchorLabeler(
         input_anchor, self._match_threshold, self._unmatched_threshold)
     (cls_targets, box_targets, num_positives) = anchor_labeler.label_anchors(
@@ -323,18 +378,21 @@ class Parser(object):
 
     # Sets up groundtruth data for evaluation.
     groundtruths = {
-        'source_id': data['source_id'],
-        'height': data['height'],
-        'width': data['width'],
-        'num_groundtrtuhs': tf.shape(data['groundtruth_classes']),
-        'boxes': box_utils.denormalize_boxes(
-            data['groundtruth_boxes'], image_shape),
-        'classes': data['groundtruth_classes'],
-        'areas': data['groundtruth_area'],
-        'is_crowds': tf.cast(data['groundtruth_is_crowd'], tf.int32),
+      'source_id': data['source_id'],
+      'filename_utf8s': data['filename_utf8s'],
+          # TPU does not support strings :(
+      'height': data['height'],
+      'width': data['width'],
+      'num_groundtrtuhs': tf.shape(data['groundtruth_classes']),
+      'boxes': box_utils.denormalize_boxes(
+          data['groundtruth_boxes'], image_shape),
+      'classes': data['groundtruth_classes'],
+      'areas': data['groundtruth_area'],
+      'is_crowds': tf.cast(data['groundtruth_is_crowd'], tf.int32),
     }
     groundtruths['source_id'] = dataloader_utils.process_source_id(
         groundtruths['source_id'])
+    self.__maybe_add_cuboid_gts(groundtruths, data)    
     groundtruths = dataloader_utils.pad_groundtruths_to_fixed_size(
         groundtruths, self._max_num_instances)
 
@@ -347,6 +405,11 @@ class Parser(object):
         'image_info': image_info,
         'groundtruths': groundtruths,
     }
+
+    if self._include_cuboids:
+      labels['cuboid_targets'] = self.__get_cuboid_targets(
+                                        data, anchor_labeler, boxes, indices)
+
     return image, labels
 
   def _parse_predict_data(self, data):
@@ -376,10 +439,14 @@ class Parser(object):
     input_anchor = anchor.Anchor(
         self._min_level, self._max_level, self._num_scales,
         self._aspect_ratios, self._anchor_size, (image_height, image_width))
+    tf.logging.info(
+      "Number of anchor boxes: %s" % input_anchor.boxes.shape[0])
 
     labels = {
         'anchor_boxes': input_anchor.multilevel_boxes,
         'image_info': image_info,
+        'filename_utf8s': data['filename_utf8s'],
+          # TPU does not support strings :(
     }
     # If mode is PREDICT_WITH_GT, returns groundtruths and training targets
     # in labels.
@@ -388,19 +455,23 @@ class Parser(object):
       boxes = box_utils.denormalize_boxes(
           data['groundtruth_boxes'], image_shape)
       groundtruths = {
-          'source_id': data['source_id'],
-          'height': data['height'],
-          'width': data['width'],
-          'num_detections': tf.shape(data['groundtruth_classes']),
-          'boxes': boxes,
-          'classes': data['groundtruth_classes'],
-          'areas': data['groundtruth_area'],
-          'is_crowds': tf.cast(data['groundtruth_is_crowd'], tf.int32),
+        'source_id': data['source_id'],
+        'filename_utf8s': data['filename_utf8s'],
+          # TPU does not support strings :(
+        'height': data['height'],
+        'width': data['width'],
+        'num_detections': tf.shape(data['groundtruth_classes']),
+        'boxes': boxes,
+        'classes': data['groundtruth_classes'],
+        'areas': data['groundtruth_area'],
+        'is_crowds': tf.cast(data['groundtruth_is_crowd'], tf.int32),
       }
       groundtruths['source_id'] = dataloader_utils.process_source_id(
           groundtruths['source_id'])
+      self.__maybe_add_cuboid_gts(groundtruths, data)
       groundtruths = dataloader_utils.pad_groundtruths_to_fixed_size(
           groundtruths, self._max_num_instances)
+      
       labels['groundtruths'] = groundtruths
 
       # Computes training objective for evaluation loss.
@@ -424,6 +495,10 @@ class Parser(object):
       labels['cls_targets'] = cls_targets
       labels['box_targets'] = box_targets
       labels['num_positives'] = num_positives
+
+      if self._include_cuboids:
+        labels['cuboid_targets'] = self.__get_cuboid_targets(
+                                        data, anchor_labeler, boxes, indices)
     return {
         'images': image,
         'labels': labels,
