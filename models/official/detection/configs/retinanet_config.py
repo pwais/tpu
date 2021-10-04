@@ -40,6 +40,7 @@ RETINANET_CFG.override({
         'skip_crowd_during_training': True,
         'max_num_instances': 100,
         'regenerate_source_id': False,
+        'include_cuboids': False,
     },
     'retinanet_head': {
         'min_level': 3,
@@ -58,6 +59,8 @@ RETINANET_CFG.override({
             'batch_norm_trainable': True,
             'use_sync_bn': False,
         },
+        'predict_cuboids': False,
+        'cuboid_yaw_num_bins': 8,
     },
     'retinanet_loss': {
         'num_classes': 91,
@@ -65,6 +68,13 @@ RETINANET_CFG.override({
         'focal_loss_gamma': 1.5,
         'huber_loss_delta': 0.1,
         'box_loss_weight': 50,
+        'cuboid_loss_weight': 0.1,
+        'cuboid_yaw_loss_weight': 0.1,
+        'cuboid_yaw_loss_residual_weight': 0.1,
+        'cuboid_yaw_num_bins': 8,
+        'include_cuboid_loss': False,
+        'cuboid_huber_loss_delta': 0.1,
+        'cuboid_yaw_use_ego': False,
     },
     'postprocess': {
         'min_level': 3,
@@ -81,5 +91,6 @@ RETINANET_RESTRICTIONS = [
     'anchor.min_level == postprocess.min_level',
     'anchor.max_level == postprocess.max_level',
     'retinanet_head.num_classes == retinanet_loss.num_classes',
+    'retinanet_head.cuboid_yaw_num_bins == retinanet_loss.cuboid_yaw_num_bins',
 ]
 # pylint: enable=line-too-long

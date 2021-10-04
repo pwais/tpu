@@ -30,12 +30,18 @@ def _get_source_id_from_encoded_image(parsed_tensors):
 class TfExampleDecoder(object):
   """Tensorflow Example proto decoder."""
 
-  def __init__(self, include_mask=False, regenerate_source_id=False):
+  def __init__(self,
+               include_mask=False,
+               regenerate_source_id=False,
+               include_cuboids=False):
     self._include_mask = include_mask
+    self._include_cuboids = include_cuboids
     self._regenerate_source_id = regenerate_source_id
     self._keys_to_features = {
         'image/encoded': tf.FixedLenFeature((), tf.string),
         'image/source_id': tf.FixedLenFeature((), tf.string, ''),
+        'image/filename': tf.FixedLenFeature((), tf.string, ''),
+        'image/filename_utf8s': tf.VarLenFeature(tf.int64),
         'image/height': tf.FixedLenFeature((), tf.int64, -1),
         'image/width': tf.FixedLenFeature((), tf.int64, -1),
         'image/object/bbox/xmin': tf.VarLenFeature(tf.float32),
@@ -50,6 +56,23 @@ class TfExampleDecoder(object):
       self._keys_to_features.update({
           'image/object/mask':
               tf.VarLenFeature(tf.string),
+      })
+    if include_cuboids:
+      self._keys_to_features.update({
+          'image/object/cuboid/cam/center_x': tf.VarLenFeature(tf.float32),
+          'image/object/cuboid/cam/center_y': tf.VarLenFeature(tf.float32),
+          'image/object/cuboid/cam/center_z': tf.VarLenFeature(tf.float32),
+          'image/object/cuboid/cam/yaw': tf.VarLenFeature(tf.float32),
+
+          'image/object/cuboid/length': tf.VarLenFeature(tf.float32),
+          'image/object/cuboid/width': tf.VarLenFeature(tf.float32),
+          'image/object/cuboid/height': tf.VarLenFeature(tf.float32),
+
+          'image/object/cuboid/box/center_x': tf.VarLenFeature(tf.float32),
+          'image/object/cuboid/box/center_y': tf.VarLenFeature(tf.float32),
+          'image/object/cuboid/box/center_depth': tf.VarLenFeature(tf.float32),
+          'image/object/cuboid/box/perspective_yaw':
+              tf.VarLenFeature(tf.float32),
       })
 
   def _decode_image(self, parsed_tensors):
@@ -150,11 +173,16 @@ class TfExampleDecoder(object):
           tf.greater(tf.strings.length(parsed_tensors['image/source_id']),
                      0), lambda: parsed_tensors['image/source_id'],
           lambda: _get_source_id_from_encoded_image(parsed_tensors))
+    filename = parsed_tensors['image/filename']
+    filename_utf8s = parsed_tensors['image/filename_utf8s']
+    # filename_utf8s.set_shape([10000])
     if self._include_mask:
       masks = self._decode_masks(parsed_tensors)
 
     decoded_tensors = {
         'image': image,
+        'filename': filename,
+        'filename_utf8s': filename_utf8s,
         'source_id': source_id,
         'height': parsed_tensors['image/height'],
         'width': parsed_tensors['image/width'],
@@ -168,4 +196,26 @@ class TfExampleDecoder(object):
           'groundtruth_instance_masks': masks,
           'groundtruth_instance_masks_png': parsed_tensors['image/object/mask'],
       })
+    if self._include_cuboids:
+      keys = (
+        'image/object/cuboid/cam/center_x',
+        'image/object/cuboid/cam/center_y',
+        'image/object/cuboid/cam/center_z',
+        'image/object/cuboid/cam/yaw',
+
+        'image/object/cuboid/length',
+        'image/object/cuboid/width',
+        'image/object/cuboid/height',
+
+        'image/object/cuboid/box/center_x',
+        'image/object/cuboid/box/center_y',
+        'image/object/cuboid/box/center_depth',
+        'image/object/cuboid/box/perspective_yaw',
+      )
+      for key in keys:
+        # E.g. image/object/cuboid/length -> cuboid/length
+        PREFIX = 'image/object/'
+        tensor_key = key[len(PREFIX):]
+        decoded_tensors[tensor_key] = parsed_tensors[key]
+
     return decoded_tensors
